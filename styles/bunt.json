@@ -1,0 +1,14 @@
+{
+  "name": "Bunt",
+  "description": "Straßen dunkel, Wasser blau, Parks grün, Gebäude in hellem Grau. Vier Garne.",
+  "layers": {
+    "major": {"color": "#2b2b2b"},
+    "medium": {"color": "#2b2b2b"},
+    "minor": {"color": "#2b2b2b"},
+    "rail": {"color": "#2b2b2b"},
+    "frame": {"color": "#2b2b2b"},
+    "water": {"color": "#2f6fb0"},
+    "green": {"color": "#4f8a3c", "row_spacing": 1.4},
+    "buildings": {"color": "#9b968c"}
+  }
+}

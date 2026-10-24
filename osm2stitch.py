@@ -1,12 +1,9 @@
-"""Erzeugt aus einem OSM-Ausschnitt (siehe extract.py) eine Ink/Stitch-fertige SVG.
+"""Erzeugt aus einem OSM-Ausschnitt eine Ink/Stitch-fertige SVG.
 
-Stil: an Stamen Toner angelehnt, ein Garn auf hellem Stoff.
-  - Gewässer          -> offene Linienfüllung, oder dichte Füllung in eigener Farbe
-  - Parks/Wald        -> Konturfüllung (konzentrische Linien wie Höhenlinien)
-  - Bahn, Nebenstraßen-> dreifacher Geradstich (bean stitch)
-  - Tertiärstraßen    -> schmale Satinsäule
-  - Hauptstraßen      -> breite Satinsäule
-  - Rahmen            -> dreifacher Geradstich
+Wie welche Objektart gestickt wird (Stickart, Breite, Dichte, Farbe, an/aus),
+steht im Stil (siehe style.py und styles/*.json). Der Standard ist an Stamen
+Toner angelehnt: Straßen als Satin bzw. Dreifachstich, Gebäudeblöcke als Umriss,
+Parks als Konturfüllung, Wasser als Fläche.
 
 Alle Maße im Code sind in mm auf dem Stoff.
 """
@@ -26,6 +23,8 @@ from shapely.geometry import LineString, MultiLineString, Point, Polygon, box
 from shapely.ops import nearest_points, unary_union
 from xml.sax.saxutils import quoteattr
 
+from style import AREA_LAYERS, LINE_LAYERS, ROUTING, load_style, set_path
+
 INKSTITCH = Path.home() / ".config/inkscape/extensions/inkstitch/bin/inkstitch"
 
 MAJOR = {"motorway", "trunk", "primary", "secondary"}
@@ -35,24 +34,10 @@ RAIL = {"rail", "light_rail", "subway"}
 GREEN = {("leisure", "park"), ("landuse", "forest"), ("natural", "wood"), ("landuse", "cemetery")}
 WATER = {("natural", "water"), ("waterway", "riverbank")}
 
-STYLE = {
-    "major_width": 1.3,     # Satinbreite Hauptstraßen
-    "medium_width": 0.9,    # Satinbreite Tertiärstraßen
-    "line_width": 0.5,      # optische Breite der Geradstich-Linien (nur für Abstände)
-    "simplify": 0.2,        # Douglas-Peucker-Toleranz
-    "min_line": 2.0,        # kürzere Linienstücke fallen weg
-    "min_area": 4.0,        # kleinere Flächen/Löcher fallen weg
-    "building_merge": 0.6,  # Gebäude mit kleinerem Abstand werden zu Blöcken verschmolzen
-    "min_building": 2.0,    # kleinere Gebäudeblöcke/Innenhöfe fallen weg
-    "min_feature": 0.6,     # schmalere Flächenteile fallen weg
-    "road_clearance": 0.2,  # Abstand Füllflächen <-> Straßen
-    "jump_distance": 1.0,   # kürzere Lücken werden direkt überstickt
-    "snap_distance": 1.0,   # Linienenden bis zu diesem Abstand ans Netz anbinden
-    "ring_snap": 2.0,       # dasselbe für Gebäudeumrisse
-    "max_travel": 25.0,     # längere Laufwege lohnen sich nicht ggü. Schnitt
-    "trim_penalty": 15.0,   # ein Fadenschnitt "kostet" so viel wie x mm Laufweg
-    "frame_margin": 0.0,
-}
+# Parallele Linien einer Klasse näher als dieser Abstand (in Metern, mindestens aber
+# x Linienbreite) werden zu einer Mittellinie zusammengefasst
+MERGE_M = {"major": 30, "medium": 25, "minor": 0, "rail": 20}
+MERGE_FACTOR = {"major": 1.1, "medium": 1.1, "minor": 1.5, "rail": 2.0}
 
 
 # ---------------------------------------------------------------- Geometrie
@@ -105,7 +90,7 @@ def drop_parallel(lines, blocker, s):
     keep = []
     for line in lines:
         inside = line.intersection(blocker)
-        long_inside = [p for p in lines_of(inside) if p.length > 3 * s["major_width"]]
+        long_inside = [p for p in lines_of(inside) if p.length > s["parallel_min_length"]]
         if not long_inside:
             keep.append(line)
             continue
@@ -114,15 +99,33 @@ def drop_parallel(lines, blocker, s):
     return keep
 
 
-def dedupe_class(lines, distance, s):
-    """Doppelt erfasste Parallelen (Richtungsfahrbahnen, Gleisbündel) zusammenfassen."""
-    kept, blocker = [], None
-    for line in sorted(lines, key=lambda l: -l.length):
-        for part in drop_parallel([line], blocker, s):
-            kept.append(part)
-            buf = part.buffer(distance, cap_style="flat")
-            blocker = buf if blocker is None else blocker.union(buf)
-    return merge_lines(kept, s)
+def centerlines(lines, d, s):
+    """Mittelachse aller Linien einer Klasse: puffern (Radius d), vereinigen und das
+    Skelett der Fläche über ein Voronoi-Diagramm bestimmen. Richtungsfahrbahnen und
+    Gleisbündel mit weniger als 2*d Abstand werden so zu einer Linie, Kreuzungen
+    treffen sich in einem Punkt."""
+    if not lines:
+        return []
+    poly = unary_union([l.buffer(d) for l in lines]).simplify(d / 10)
+    pts = shapely.get_coordinates(shapely.segmentize(poly.boundary, d / 3))
+    edges = shapely.get_parts(shapely.voronoi_polygons(shapely.multipoints(pts), only_edges=True))
+    shapely.prepare(poly)
+    skeleton = unary_union(edges[shapely.contains_properly(poly, edges)])
+
+    # Stichleitungen des Skeletts (zu den Ecken der Pufferfläche) kappen
+    for _ in range(6):
+        pieces = lines_of(shapely.line_merge(skeleton))
+        degree = {}
+        for l in pieces:
+            for c in (key(l.coords[0]), key(l.coords[-1])):
+                degree[c] = degree.get(c, 0) + 1
+        keep = [l for l in pieces
+                if l.length >= 2 * d
+                or (degree[key(l.coords[0])] == 1) == (degree[key(l.coords[-1])] == 1)]
+        if len(keep) == len(pieces):
+            break
+        skeleton = unary_union(keep)
+    return [l.simplify(s["simplify"]) for l in lines_of(shapely.line_merge(skeleton)) if l.length >= s["min_line"]]
 
 
 def cut_lines(lines, cutter, s):
@@ -206,9 +209,10 @@ def key(c):
 class Network:
     """Linien-Netz für Laufwege zwischen zwei Objekten.
 
-    Laufwege dürfen über Geradstich-Linien (werden ohnehin dreifach überstickt
-    bzw. sind es schon) und über die Mittellinien noch nicht gestickter
-    Satinsäulen führen (die decken den Laufweg später zu)."""
+    Jede Kante gehört zu einem Objekt (owner = (art, nr, farbe, deckt_ab)) oder ist
+    eine kurze Anbindung (owner None). Ein Laufweg darf über eine Kante führen, wenn
+    sie später ohnehin zugestickt wird (noch nicht gestickt und Satin bzw.
+    Mehrfachstich) oder wenn sie in derselben Farbe als Geradstich schon da ist."""
 
     def __init__(self, lines, s):
         geoms = [l for l, _ in lines]
@@ -247,12 +251,17 @@ class Network:
                 if a != b:
                     self.g.add_edge(a, b, weight=math.dist(c1, c2), coords=[c1, c2], owner=owner)
 
-    def route(self, items, pos, sewn, s):
+    def route(self, items, pos, sewn, s, color):
         """Greedy: immer das Objekt als nächstes, das über das Netz (oder mit
         Schnitt) am billigsten erreichbar ist. Liefert Objekte + Laufwege."""
         def weight(u, v, d):
             o = d["owner"]
-            return d["weight"] if o is None or o[0] == "run" or o not in sewn else None
+            if o is None:
+                return d["weight"]
+            kind, _, c, covers = o
+            if o not in sewn:
+                return d["weight"] if covers or c == color else None
+            return d["weight"] if kind == "run" and c == color else None
 
         items, out, trims = list(items), [], 0
         while items:
@@ -290,7 +299,7 @@ class Network:
                 for u, v in zip(path, path[1:]):
                     c = self.g[u][v]["coords"]
                     coords += (c if key(c[0]) == u else c[::-1])[1:]
-                out.append({"kind": "run", "coords": coords, "start": coords[0], "end": coords[-1],
+                out.append({"kind": "run", "coords": coords, "start": coords[0], "end": coords[-1], "color": color,
                             "bean": 0, "stitch_length": 2.0, "display_width": 0.15, "travel": True})
             out.append(it)
             sewn.add(it["owner"])
@@ -312,6 +321,12 @@ def poly_item(poly, kind, **kw):
     return {"kind": kind, "poly": poly, "start": c, "end": c, "reversible": False, **kw}
 
 
+def order_colors(colors, prev=None, nxt=None):
+    """Farbreihenfolge innerhalb einer Stufe: Anschlussfarben an den Rand legen,
+    damit möglichst wenige Farbwechsel entstehen."""
+    return sorted(colors, key=lambda c: (c != prev, c == nxt))
+
+
 # ---------------------------------------------------------------- SVG
 
 def fmt(pts):
@@ -327,25 +342,24 @@ def attrs(d):
     return " ".join(f"{k}={quoteattr(str(v))}" for k, v in d.items())
 
 
-def svg_element(it, color, ident):
-    k = it["kind"]
-    color = it.get("color", color)
+def svg_element(it, ident):
+    k, color = it["kind"], it["color"]
     base = {"id": ident}
     if it.get("trim_after"):
         base["inkstitch:trim_after"] = "True"
     if k == "fill":
         base.update({
             "d": path_d_poly(it["poly"]),
-            "style": f"fill:{color};fill-rule:evenodd;stroke:none" + (";fill-opacity:0.35" if it["sparse"] else ""),
-            "inkstitch:fill_method": it.get("method", "tatami_fill"),
+            "style": f"fill:{color};fill-rule:evenodd;stroke:none;fill-opacity:{it['opacity']}",
+            "inkstitch:fill_method": it["method"],
             "inkstitch:angle": it["angle"],
             "inkstitch:row_spacing_mm": it["row_spacing"],
             "inkstitch:max_stitch_length_mm": it["stitch_length"],
-            "inkstitch:running_stitch_length_mm": it["stitch_length"] if it["sparse"] else 2.0,
-            "inkstitch:fill_underlay": "False" if it["sparse"] else "True",
+            "inkstitch:running_stitch_length_mm": it["stitch_length"] if it["method"] == "contour_fill" else 2.0,
+            "inkstitch:fill_underlay": "True" if it["underlay"] else "False",
             "inkstitch:fill_underlay_angle": it["angle"] + 90,
             "inkstitch:fill_underlay_row_spacing_mm": 1.5,
-            "inkstitch:expand_mm": 0 if it["sparse"] else 0.2,
+            "inkstitch:expand_mm": 0.2 if it["underlay"] else 0,
             "inkstitch:staggers": 4,
         })
     elif k == "satin":
@@ -354,8 +368,8 @@ def svg_element(it, color, ident):
             "d": f"M {fmt(left)} M {fmt(right)}",
             "style": f"fill:none;stroke:{color};stroke-width:0.15",
             "inkstitch:satin_column": "True",
-            "inkstitch:zigzag_spacing_mm": 0.4,
-            "inkstitch:pull_compensation_mm": 0.15,
+            "inkstitch:zigzag_spacing_mm": it["density"],
+            "inkstitch:pull_compensation_mm": it["pull_compensation"],
             "inkstitch:center_walk_underlay": "True",
             "inkstitch:contour_underlay": "True" if it["width"] >= 1.5 else "False",
         })
@@ -369,7 +383,7 @@ def svg_element(it, color, ident):
     return f"    <path {attrs(base)} />"
 
 
-def write_svg(path, layers, w, h, color):
+def write_svg(path, layers, w, h):
     out = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" '
@@ -380,27 +394,26 @@ def write_svg(path, layers, w, h, color):
     ]
     n = 0
     for name, items in layers:
-        out.append(f'  <g inkscape:groupmode="layer" inkscape:label={quoteattr(name)} id={quoteattr("layer_" + name)}>')
+        out.append(f'  <g inkscape:groupmode="layer" inkscape:label={quoteattr(name)}>')
         for it in items:
             n += 1
-            out.append(svg_element(it, color, f"{it['kind']}{n}"))
+            out.append(svg_element(it, f"{it['kind']}{n}"))
         out.append("  </g>")
     out.append("</svg>")
     Path(path).write_text("\n".join(out))
 
 
-def write_preview_svg(path, layers, w, h, color, fabric="#f5f2ea"):
+def write_preview_svg(path, layers, w, h, fabric="#f5f2ea"):
     """Schnelle Ansicht fürs Web: Satins als breite Linie, Laufwege ausgeblendet."""
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">',
            f'<rect width="{w}" height="{h}" fill="{fabric}"/>']
     for _, items in layers:
         for it in items:
-            c = it.get("color", color)
+            c = it["color"]
             if it.get("travel"):
                 continue
             if it["kind"] == "fill":
-                op = 1 if not it["sparse"] else (0.18 if it.get("method") == "contour_fill" else 0.4)
-                out.append(f'<path d="{path_d_poly(it["poly"])}" fill="{c}" fill-opacity="{op}" fill-rule="evenodd"/>')
+                out.append(f'<path d="{path_d_poly(it["poly"])}" fill="{c}" fill-opacity="{it["opacity"]}" fill-rule="evenodd"/>')
             elif it["kind"] == "satin":
                 out.append(f'<polyline points="{fmt(it["coords"])}" fill="none" stroke="{c}" '
                            f'stroke-width="{it["width"]}" stroke-linejoin="round"/>')
@@ -414,10 +427,49 @@ def write_preview_svg(path, layers, w, h, color, fabric="#f5f2ea"):
 
 # ---------------------------------------------------------------- Hauptteil
 
-ALL_LAYERS = {"water", "green", "rail", "minor", "frame"}
+def classify(f):
+    """OSM-Objekt -> Ebene des Stils (oder None)."""
+    t = f["tags"]
+    if t.get("tunnel", "no") != "no" or t.get("covered", "no") != "no":
+        return None
+    try:
+        if int(t.get("layer", 0)) < 0:
+            return None
+    except ValueError:
+        pass
+    if f["kind"] == "way" and t.get("area") != "yes":
+        hw, rw = t.get("highway", "").removesuffix("_link"), t.get("railway")
+        if hw in MAJOR:
+            return "major"
+        if hw in MEDIUM:
+            return "medium"
+        if hw in MINOR:
+            return "minor"
+        if rw in RAIL and "service" not in t:
+            return "rail"
+    elif f["kind"] == "area":
+        items = set(t.items())
+        if items & WATER:
+            return "water"
+        if items & GREEN:
+            return "green"
+        if t.get("building", "no") not in ("no", "roof"):
+            return "buildings"
+    return None
 
 
-def build(data, width_m, w_mm, h_mm, s, water_color=None, buildings="outline", include=ALL_LAYERS):
+def line_width(cfg):
+    """Optische Breite einer Linie auf dem Stoff (für Abstände und Verdrängung)."""
+    if cfg["stitch"] == "satin":
+        return cfg["width"]
+    return 0.5 if cfg["repeats"] >= 3 else 0.3
+
+
+def build(data, width_m, w_mm, h_mm, style):
+    s = {**style["generalization"], **ROUTING[style["routing"]["mode"]]}
+    L = style["layers"]
+    enabled = {name for name, cfg in L.items() if cfg["enabled"]}
+
     lat, lon = data["center"]
     zone = int((lon + 180) // 6) + 1
     proj = Transformer.from_crs("EPSG:4326", f"+proj=utm +zone={zone} +ellps=GRS80 +units=m", always_xy=True)
@@ -428,117 +480,126 @@ def build(data, width_m, w_mm, h_mm, s, water_color=None, buildings="outline", i
         x, y = proj.transform(xy[:, 0], xy[:, 1])
         return np.column_stack([(x - cx) * scale + w_mm / 2, h_mm / 2 - (y - cy) * scale])
 
-    frame = box(0, 0, w_mm, h_mm).buffer(-s["frame_margin"])
-    groups = {k: [] for k in ("major", "medium", "minor", "rail", "water", "green", "building")}
-
+    frame = box(0, 0, w_mm, h_mm)
+    groups = {name: [] for name in LINE_LAYERS + AREA_LAYERS}
     for f in data["features"]:
-        t = f["tags"]
-        if t.get("tunnel", "no") != "no" or t.get("covered", "no") != "no":
-            continue
-        try:
-            if int(t.get("layer", 0)) < 0:
-                continue
-        except ValueError:
-            pass
-        g = None
-        if f["kind"] == "way" and t.get("area") != "yes":
-            hw, rw = t.get("highway", "").removesuffix("_link"), t.get("railway")
-            if hw in MAJOR:
-                g = "major"
-            elif hw in MEDIUM:
-                g = "medium"
-            elif hw in MINOR:
-                g = "minor"
-            elif rw in RAIL and "service" not in t:
-                g = "rail"
-        elif f["kind"] == "area":
-            items = set(t.items())
-            if items & WATER:
-                g = "water"
-            elif items & GREEN:
-                g = "green"
-            elif t.get("building", "no") not in ("no", "roof"):
-                g = "building"
-        if g is None or (g in ALL_LAYERS and g not in include) or (g == "building" and buildings == "none"):
+        g = classify(f)
+        if g is None or g not in enabled:
             continue
         geom = f["geom"] if "geom" in f else wkt.loads(f["wkt"])
-        geom = shapely.transform(geom, to_mm).intersection(frame)
+        geom = shapely.transform(geom, to_mm).intersection(frame.buffer(5 if g in LINE_LAYERS else 0))
         if not geom.is_empty:
             groups[g].append(geom)
 
-    mw, dw, lw = s["major_width"], s["medium_width"], s["line_width"]
+    # Linien in absteigender Priorität: zusammenfassen, Parallelen zu höheren Klassen
+    # entfernen, Satin an querender Satin abschneiden
+    lines, covered, satin_cover = {}, None, None
+    for name in LINE_LAYERS:
+        cfg, w = L[name], line_width(L[name])
+        # über den Rahmen hinaus vorhandene Linien sorgen dafür, dass das Skelett bis zum Rand reicht
+        ls = centerlines(groups[name], max(w * MERGE_FACTOR[name], MERGE_M[name] / width_m * w_mm) / 2, s)
+        ls = [p for l in ls for p in lines_of(l.intersection(frame))]
+        if cfg["stitch"] == "satin" and satin_cover is not None:
+            ls = cut_lines(ls, satin_cover.buffer(-0.15), s)
+            other = covered.difference(satin_cover)
+            ls = drop_parallel(ls, other.buffer(w) if not other.is_empty else None, s)
+        elif covered is not None:
+            ls = drop_parallel(ls, covered.buffer(w), s)
+        lines[name] = ls
+        if ls:
+            area = unary_union([l.buffer(w / 2) for l in ls])
+            covered = area if covered is None else covered.union(area)
+            if cfg["stitch"] == "satin":
+                satin_cover = area if satin_cover is None else satin_cover.union(area)
 
-    # Linien: zusammenführen, Parallelen ausdünnen, Satin an Satin abschneiden
-    major = dedupe_class(merge_lines(groups["major"], s), mw * 1.1, s)
-    major_area = unary_union([l.buffer(mw / 2) for l in major])
-    medium = dedupe_class(merge_lines(groups["medium"], s), dw * 1.1, s)
-    medium = cut_lines(medium, major_area.buffer(-0.15), s)
-    medium_area = unary_union([l.buffer(dw / 2) for l in medium])
-    satin_area = major_area.union(medium_area)
-    minor = dedupe_class(merge_lines(groups["minor"], s), lw * 1.5, s)
-    minor = drop_parallel(minor, satin_area.buffer(lw), s)
-    rail = dedupe_class(merge_lines(groups["rail"], s), lw * 2, s)
-    rail = drop_parallel(rail, satin_area.buffer(lw), s)
-
-    # Flächen: Platz für Straßen freihalten, damit nichts übereinander gestickt wird
-    road_area = unary_union([satin_area] + [l.buffer(lw / 2) for l in minor + rail])
-    keepout = road_area.buffer(s["road_clearance"])
-    water = clean_area(unary_union(groups["water"]).difference(keepout), s)
+    # Flächen: Platz für Linien freihalten, damit nichts übereinander gestickt wird
+    keepout = covered.buffer(s["road_clearance"]) if covered is not None else Polygon()
+    areas = {}
+    areas["water"] = clean_area(unary_union(groups["water"]).difference(keepout), s)
     a = s["building_merge"] / 2
-    blocks = unary_union(groups["building"]).buffer(a, join_style="mitre").buffer(-a, join_style="mitre")
-    blocks = clean_area(blocks.difference(keepout).difference(water.buffer(0.3)), s, s["min_building"])
-    green = clean_area(unary_union(groups["green"]).difference(keepout).difference(water.buffer(0.5))
-                       .difference(blocks.buffer(0.3)), s)
+    blocks = unary_union(groups["buildings"]).buffer(a, join_style="mitre").buffer(-a, join_style="mitre")
+    areas["buildings"] = clean_area(blocks.difference(keepout).difference(areas["water"].buffer(0.3)),
+                                    s, s["min_building"])
+    areas["green"] = clean_area(unary_union(groups["green"]).difference(keepout)
+                                .difference(areas["water"].buffer(0.5))
+                                .difference(areas["buildings"].buffer(0.3)), s)
 
-    # Linienobjekte; Koordinaten gerundet, damit sie exakt auf Netzknoten liegen
-    def lines_to_items(lines, kind, **kw):
+    # Objekte erzeugen; Koordinaten gerundet, damit sie exakt auf Netzknoten liegen
+    net_lines = []
+
+    def add_lines(geoms, kind, cfg, **kw):
         out = []
-        for l in lines:
+        covers = kind == "satin" or cfg.get("repeats", 1) >= 3
+        for l in geoms:
             l = LineString([key(c) for c in l.coords])
-            out.append(line_item(l, kind, owner=(kind, len(all_lines)), **kw))
-            all_lines.append((l, (kind, len(all_lines))))
+            owner = (kind, len(net_lines), cfg["color"], covers)
+            net_lines.append((l, owner))
+            out.append(line_item(l, kind, owner=owner, color=cfg["color"], **kw))
         return out
 
-    all_lines = []
-    rings = [r for p in polys_of(blocks) for r in [p.exterior, *p.interiors]] if buildings == "outline" else []
-    runs = (lines_to_items(rail, "run", bean=1, stitch_length=2.0, display_width=0.4)
-            + lines_to_items(rings, "run", ring=True, bean=0, stitch_length=1.5, display_width=0.25)
-            + lines_to_items(minor, "run", bean=1, stitch_length=2.0, display_width=0.5))
-    medium_items = lines_to_items([p for l in medium for p in split_sharp(l)], "satin", width=dw)
-    major_items = lines_to_items([p for l in major for p in split_sharp(l)], "satin", width=mw)
-    net = Network(all_lines, s)
+    def run_kw(cfg):
+        return {"bean": (cfg["repeats"] - 1) // 2, "stitch_length": cfg["stitch_length"],
+                "display_width": 0.5 if cfg["repeats"] >= 3 else 0.25}
+
+    fills, runs, satins = [], [], {}
+    for name in AREA_LAYERS:
+        cfg = L[name]
+        if name not in enabled:
+            continue
+        polys = polys_of(areas[name])
+        if cfg["stitch"] == "outline":
+            rings = [r for p in polys for r in [p.exterior, *p.interiors]]
+            runs += add_lines(rings, "run", cfg, ring=True, layer=name, **run_kw(cfg))
+        else:
+            contour = cfg["stitch"] == "contour"
+            opacity = 0.18 if contour else (1 if cfg["row_spacing"] <= 0.4 else 0.4)
+            fills += [poly_item(p, "fill", layer=name, color=cfg["color"], opacity=opacity,
+                                method="contour_fill" if contour else "tatami_fill",
+                                angle=cfg["angle"], row_spacing=cfg["row_spacing"],
+                                stitch_length=cfg["stitch_length"], underlay=cfg["underlay"])
+                      for p in polys]
+    for name in LINE_LAYERS:
+        cfg = L[name]
+        if cfg["stitch"] == "satin":
+            satins[name] = add_lines([p for l in lines[name] for p in split_sharp(l)], "satin", cfg, layer=name,
+                                     width=cfg["width"], density=cfg["density"],
+                                     pull_compensation=style["fabric"]["pull_compensation"])
+        else:
+            runs += add_lines(lines[name], "run", cfg, layer=name, **run_kw(cfg))
+    if "frame" in enabled:
+        # Rahmen als Ring im Netz: Straßen enden auf ihm, er dient als Rundweg ohne Schnitt
+        runs += add_lines([frame.exterior], "run", L["frame"], ring=True, layer="frame", **run_kw(L["frame"]))
+    net = Network(net_lines, s)
+
+    # Stickreihenfolge: Flächen -> Geradstich -> Satin (niedrige vor hoher Priorität),
+    # innerhalb einer Stufe nach Farbe gruppiert
+    satin_stages = [(name, satins[name]) for name in reversed(LINE_LAYERS) if satins.get(name)]
+    first_satin = L[satin_stages[0][0]]["color"] if satin_stages else None
+    run_colors = order_colors({it["color"] for it in runs}, nxt=first_satin)
+    fill_colors = order_colors({it["color"] for it in fills}, nxt=run_colors[0] if run_colors else first_satin)
 
     layers, trims, pos, sewn = [], 0, (0.0, 0.0), set()
-    for name, items in [
-        ("Wasser", [poly_item(p, "fill", angle=0, row_spacing=0.25, stitch_length=3.0, sparse=False, color=water_color)
-                    if water_color else
-                    poly_item(p, "fill", angle=0, row_spacing=0.6, stitch_length=3.0, sparse=True)
-                    for p in polys_of(water)]),
-        ("Gruen", [poly_item(p, "fill", method="contour_fill", angle=0, row_spacing=1.8, stitch_length=2.5, sparse=True)
-                   for p in polys_of(green)]),
-        ("Gebaeude", [poly_item(p, "fill", angle=135, row_spacing=0.8, stitch_length=3.0, sparse=True)
-                      for p in polys_of(blocks)] if buildings == "fill" else []),
-    ]:
-        ordered, pos = order_paths(items, pos)
+    for color in fill_colors:
+        ordered, pos = order_paths([it for it in fills if it["color"] == color], pos)
         for it in ordered:
             it["trim_after"] = True
-        layers.append((name, ordered))
+        layers.append((f"Flächen {color}", ordered))
         trims += len(ordered)
-    for name, items in [("Linien", runs), ("Tertiaerstrassen", medium_items), ("Hauptstrassen", major_items)]:
-        ordered, pos, t = net.route(items, pos, sewn, s)
-        layers.append((name, ordered))
+    for color in run_colors:
+        ordered, pos, t = net.route([it for it in runs if it["color"] == color], pos, sewn, s, color)
+        layers.append((f"Linien {color}", ordered))
         trims += t
-    if layers[-1][1]:
-        layers[-1][1][-1]["trim_after"] = True
-    if "frame" in include:
-        fr = frame.exterior.coords
-        layers.append(("Rahmen", [{"kind": "run", "coords": list(fr), "start": fr[0], "end": fr[-1],
-                                   "bean": 1, "stitch_length": 2.5, "display_width": 0.5}]))
+    for name, items in satin_stages:
+        ordered, pos, t = net.route(items, pos, sewn, s, L[name]["color"])
+        layers.append((f"{L[name]['label']} (Satin)", ordered))
+        trims += t
 
-    stats = {name: n for name, items in layers if (n := sum(1 for it in items if not it.get("travel")))}
-    stats["davon Gebaeudeumrisse"] = len(rings)
-    stats["Laufwege"] = sum(1 for _, items in layers for it in items if it.get("travel"))
+    all_items = [it for _, items in layers for it in items]
+    stats = {L[name]["label"]: n for name in L
+             if (n := sum(1 for it in all_items if it.get("layer") == name))}
+    stats["Laufwege"] = sum(1 for it in all_items if it.get("travel"))
     stats["Schnitte"] = trims
+    stats["Farben"] = len({it["color"] for it in all_items})
     return layers, stats
 
 
@@ -560,20 +621,24 @@ def main():
     ap.add_argument("-o", "--output", default="karte", help="Ausgabe-Basisname")
     ap.add_argument("--width-m", type=float, default=1600, help="Kartenbreite in der Realität")
     ap.add_argument("--size", default="100x100", help="Stickgröße in mm, BxH")
-    ap.add_argument("--color", default="#000000", help="Garnfarbe")
-    ap.add_argument("--buildings", choices=("outline", "fill", "none"), default="outline",
-                    help="Gebäudeblöcke als Umriss, offene Füllung oder gar nicht")
-    ap.add_argument("--water-color", help="eigene Garnfarbe für Wasser (sonst offene Füllung in --color)")
+    ap.add_argument("--style", default="toner-wasser", help="Stil aus styles/ oder Pfad zu einer JSON-Datei")
+    ap.add_argument("--set", action="append", default=[], metavar="PFAD=WERT",
+                    help="Stilwert ändern, z.B. layers.water.color=#ff0000 oder routing.mode=continuous")
     ap.add_argument("--format", default="pes", help="Stickformat für Ink/Stitch (pes, dst, jef, ...)")
     ap.add_argument("--no-inkstitch", action="store_true", help="nur SVG schreiben")
     args = ap.parse_args()
 
+    overrides = {}
+    for item in args.set:
+        path, _, value = item.partition("=")
+        set_path(overrides, path, value)
+    style = load_style(args.style, overrides)
     w_mm, h_mm = (float(v) for v in args.size.lower().split("x"))
     data = json.load(open(args.extract))
-    layers, stats = build(data, args.width_m, w_mm, h_mm, STYLE, args.water_color, args.buildings)
+    layers, stats = build(data, args.width_m, w_mm, h_mm, style)
     svg = Path(args.output + ".svg")
     svg.parent.mkdir(parents=True, exist_ok=True)
-    write_svg(svg, layers, w_mm, h_mm, args.color)
+    write_svg(svg, layers, w_mm, h_mm)
     print(f"{svg}: " + ", ".join(f"{k} {v}" for k, v in stats.items()))
 
     if not args.no_inkstitch:

@@ -1,0 +1,7 @@
+{
+  "name": "Toner einfarbig",
+  "description": "Ein einziges Garn. Wasser als offene Linienfüllung, damit es sich von den Straßen abhebt.",
+  "layers": {
+    "water": {"color": "#1a1a1a", "row_spacing": 0.6, "underlay": false}
+  }
+}

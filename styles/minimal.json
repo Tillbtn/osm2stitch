@@ -1,0 +1,10 @@
+{
+  "name": "Minimal",
+  "description": "Nur Straßennetz und Uferlinien – schnell gestickt, sehr grafisch. Ein Garn.",
+  "layers": {
+    "water": {"color": "#1a1a1a", "stitch": "outline", "repeats": 3, "stitch_length": 2.0},
+    "green": {"enabled": false},
+    "buildings": {"enabled": false},
+    "rail": {"enabled": false}
+  }
+}
