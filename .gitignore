@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Daten und erzeugte Dateien
+data/
+web_jobs/
+out/
+kreuzberg.json
+*.svgz

@@ -1,0 +1,208 @@
+"""Lokale Demo-Website: Kartenausschnitt wählen -> Stickdatei herunterladen.
+
+    .venv/bin/python app.py --db data/berlin.sqlite
+    -> http://127.0.0.1:8000
+"""
+import argparse
+import collections
+import math
+import queue
+import re
+import subprocess
+import threading
+import time
+import traceback
+import uuid
+import zipfile
+from pathlib import Path
+
+import pyembroidery
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from osm2stitch import ALL_LAYERS, STYLE, build, inkstitch_cmd, write_preview_svg, write_svg
+from osmindex import Index
+
+ROOT = Path(__file__).parent
+JOBS_DIR = ROOT / "web_jobs"
+FORMATS = ("pes", "dst", "jef", "exp", "vp3", "xxx")
+HEX = r"^#[0-9a-fA-F]{6}$"
+
+# grobe Annahmen für die Zeitschätzung einer Haushaltsmaschine
+STITCHES_PER_MIN = 650
+SECONDS_PER_TRIM = 7
+SECONDS_PER_COLOR_CHANGE = 45
+
+
+class JobRequest(BaseModel):
+    lat: float
+    lon: float
+    width_m: float = Field(ge=200, le=5000)
+    size_w: float = Field(ge=30, le=400)
+    size_h: float = Field(ge=30, le=400)
+    format: str = "pes"
+    color: str = Field("#000000", pattern=HEX)
+    water_color: str | None = Field(None, pattern=HEX)
+    buildings: str = Field("outline", pattern="^(outline|fill|none)$")
+    include: list[str] = sorted(ALL_LAYERS)
+
+
+class Job:
+    def __init__(self, req):
+        self.id = uuid.uuid4().hex[:10]
+        self.req = req
+        self.status = "queued"
+        self.error = None
+        self.geometry = None
+        self.result = None
+        self.files = {}
+        self.created = time.time()
+        self.dir = JOBS_DIR / self.id
+
+    def public(self, position=None):
+        return {"id": self.id, "status": self.status, "error": self.error, "queue_position": position,
+                "geometry": self.geometry, "result": self.result,
+                "files": {k: f"/files/{self.id}/{v}" for k, v in self.files.items()}}
+
+
+app = FastAPI(title="OSM-Stickkarte")
+jobs: dict[str, Job] = {}
+pending: queue.Queue[Job] = queue.Queue()
+index: Index | None = None
+
+
+def embroidery_stats(path):
+    pattern = pyembroidery.read(str(path))
+    c = collections.Counter(s[2] & pyembroidery.COMMAND_MASK for s in pattern.stitches)
+    minx, miny, maxx, maxy = pattern.extends()
+    stitches, trims = c[pyembroidery.STITCH], c[pyembroidery.TRIM]
+    colors = max(1, len(pattern.threadlist))
+    seconds = stitches / STITCHES_PER_MIN * 60 + trims * SECONDS_PER_TRIM + (colors - 1) * SECONDS_PER_COLOR_CHANGE
+    return {"stitches": stitches, "trims": trims, "jumps": c[pyembroidery.JUMP], "colors": colors,
+            "threads": [t.hex_color() for t in pattern.threadlist],
+            "width_mm": round((maxx - minx) / 10, 1), "height_mm": round((maxy - miny) / 10, 1),
+            "minutes": math.ceil(seconds / 60)}
+
+
+def process(job):
+    r = job.req
+    job.dir.mkdir(parents=True, exist_ok=True)
+    height_m = r.width_m * r.size_h / r.size_w
+
+    job.status = "geometry"
+    t0 = time.time()
+    data = index.query(r.lat, r.lon, r.width_m, height_m)
+    layers, stats = build(data, r.width_m, r.size_w, r.size_h, STYLE, r.water_color, r.buildings, set(r.include))
+    write_svg(job.dir / "karte.svg", layers, r.size_w, r.size_h, r.color)
+    write_preview_svg(job.dir / "schnellansicht.svg", layers, r.size_w, r.size_h, r.color)
+    job.geometry = {"objects": stats, "seconds": round(time.time() - t0, 1)}
+    job.files.update(svg="karte.svg", preview_svg="schnellansicht.svg")
+
+    job.status = "inkstitch"
+    t0 = time.time()
+    emb = job.dir / f"karte.{r.format}"
+    png = job.dir / "stickvorschau.png"
+    procs = []
+    for out, ext, params in ((emb, "output", {"format": r.format}), (png, "png_realistic", {"dpi": 200})):
+        f = open(out, "wb")
+        procs.append((subprocess.Popen(inkstitch_cmd(job.dir / "karte.svg", ext, **params),
+                                       stdout=f, stderr=subprocess.PIPE), f, out))
+    for p, f, out in procs:
+        _, err = p.communicate()
+        f.close()
+        if p.returncode != 0 or out.stat().st_size == 0:
+            raise RuntimeError("Ink/Stitch: " + err.decode(errors="replace").strip()[-800:])
+    job.files.update(embroidery=emb.name, png=png.name)
+    job.result = embroidery_stats(emb) | {"seconds": round(time.time() - t0, 1)}
+
+    readme = (
+        "OSM-Stickkarte\n==============\n\n"
+        f"Mittelpunkt: {r.lat:.6f}, {r.lon:.6f}\n"
+        f"Ausschnitt:  {r.width_m:.0f} m x {height_m:.0f} m\n"
+        f"Stickgröße:  {r.size_w:.0f} x {r.size_h:.0f} mm  (1 mm = {r.width_m / r.size_w:.1f} m)\n"
+        f"Stiche:      {job.result['stitches']}, Fadenschnitte: {job.result['trims']}, "
+        f"geschätzt ca. {job.result['minutes']} min\n"
+        f"Garne (in Stickreihenfolge): {', '.join(job.result['threads'])}\n\n"
+        "karte.svg kann in Inkscape mit Ink/Stitch weiterbearbeitet werden.\n\n"
+        f"Kartendaten: © OpenStreetMap-Mitwirkende, ODbL – https://www.openstreetmap.org/copyright\n"
+        f"Datenstand: {index.meta.get('timestamp', '?')} ({index.meta.get('source', '?')})\n"
+    )
+    (job.dir / "LIESMICH.txt").write_text(readme)
+    with zipfile.ZipFile(job.dir / "stickkarte.zip", "w", zipfile.ZIP_DEFLATED) as z:
+        for name in (emb.name, "karte.svg", png.name, "LIESMICH.txt"):
+            z.write(job.dir / name, name)
+    job.files["zip"] = "stickkarte.zip"
+    job.status = "done"
+
+
+def worker():
+    while True:
+        job = pending.get()
+        try:
+            process(job)
+        except Exception as e:
+            traceback.print_exc()
+            job.status, job.error = "error", str(e)
+
+
+@app.get("/")
+def home():
+    return FileResponse(ROOT / "web" / "index.html")
+
+
+@app.get("/api/info")
+def info():
+    return {"bounds": index.bounds, "source": index.meta.get("source"), "timestamp": index.meta.get("timestamp"),
+            "formats": FORMATS, "layers": sorted(ALL_LAYERS),
+            "estimate": {"stitches_per_min": STITCHES_PER_MIN, "seconds_per_trim": SECONDS_PER_TRIM}}
+
+
+@app.post("/api/jobs")
+def create_job(req: JobRequest):
+    if req.format not in FORMATS:
+        raise HTTPException(400, f"Unbekanntes Format: {req.format}")
+    if unknown := set(req.include) - ALL_LAYERS:
+        raise HTTPException(400, f"Unbekannte Ebenen: {', '.join(sorted(unknown))}")
+    height_m = req.width_m * req.size_h / req.size_w
+    dlat = height_m / 2 / 111_320
+    dlon = req.width_m / 2 / (111_320 * math.cos(math.radians(req.lat)))
+    if not (index.covers(req.lat - dlat, req.lon - dlon) and index.covers(req.lat + dlat, req.lon + dlon)):
+        raise HTTPException(400, "Der Ausschnitt liegt (teilweise) außerhalb der geladenen OSM-Daten.")
+    job = Job(req)
+    jobs[job.id] = job
+    pending.put(job)
+    return job.public(position=pending.qsize())
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    if not re.fullmatch(r"[0-9a-f]{10}", job_id) or job_id not in jobs:
+        raise HTTPException(404, "Unbekannter Auftrag")
+    job = jobs[job_id]
+    position = None
+    if job.status == "queued":
+        position = sum(1 for j in list(pending.queue) if j.created <= job.created)
+    return job.public(position)
+
+
+def main():
+    global index
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--db", default=str(ROOT / "data" / "berlin.sqlite"), help="Index aus osmindex.py")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8000)
+    args = ap.parse_args()
+
+    index = Index(args.db)
+    JOBS_DIR.mkdir(exist_ok=True)
+    app.mount("/files", StaticFiles(directory=JOBS_DIR), name="files")
+    threading.Thread(target=worker, daemon=True).start()
+    print(f"Daten: {index.meta.get('source')} ({index.meta.get('count')} Objekte, Stand {index.meta.get('timestamp')})")
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()
