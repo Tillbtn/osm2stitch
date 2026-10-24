@@ -1,7 +1,7 @@
-"""Lokale Demo-Website: Kartenausschnitt wählen -> Stickdatei herunterladen.
+"""Local demo website: pick a map section -> download an embroidery file.
 
-    uv run app.py                       # Postpass, lokaler Index als Ausweichlösung
-    uv run app.py --source local        # nur lokaler Index (data/berlin.sqlite)
+    uv run app.py                       # Postpass, local index as fallback
+    uv run app.py --source local        # local index only (data/berlin.sqlite)
     -> http://127.0.0.1:8000
 """
 import argparse
@@ -34,7 +34,7 @@ ROOT = Path(__file__).parent
 JOBS_DIR = ROOT / "web_jobs"
 FORMATS = ("pes", "dst", "jef", "exp", "vp3", "xxx")
 
-# grobe Annahmen für die Zeitschätzung einer Haushaltsmaschine
+# rough assumptions for the time estimate of a home embroidery machine
 STITCHES_PER_MIN = 650
 SECONDS_PER_TRIM = 7
 SECONDS_PER_COLOR_CHANGE = 45
@@ -74,7 +74,7 @@ class Job:
 app = FastAPI(title="OSM-Stickkarte")
 jobs: dict[str, Job] = {}
 pending: queue.Queue[Job] = queue.Queue()
-source = None  # Index, PostpassSource oder FallbackSource
+source = None  # Index, PostpassSource or FallbackSource
 
 
 def embroidery_stats(path):
@@ -91,7 +91,7 @@ def embroidery_stats(path):
 
 
 def run_inkstitch_parallel(svg, emb, png, fmt):
-    """Stickdatei und Vorschau gleichzeitig berechnen."""
+    """Compute the embroidery file and the preview in parallel."""
     procs = []
     for out, ext, params in ((emb, "output", {"format": fmt}), (png, "png_realistic", {"dpi": 200})):
         f = open(out, "wb")
@@ -132,7 +132,7 @@ def process(job):
     try:
         run_inkstitch_parallel(job.dir / "karte.svg", emb, png, r.format)
     except RuntimeError:
-        # Ink/Stitch scheitert vereinzelt an Konturfüllungen als Spirale -> ohne Spiralen neu
+        # Ink/Stitch occasionally fails on spiral contour fills -> retry without spirals
         if not strip_spirals(layers):
             raise
         write_svg(job.dir / "karte.svg", layers, r.size_w, r.size_h)
@@ -186,7 +186,7 @@ def info():
 
 @app.get("/api/styles")
 def styles():
-    """Voreinstellungen und Schema für den Stil-Editor."""
+    """Presets and schema for the style editor."""
     return {"presets": list_presets(), "layers": list(LAYERS),
             "types": {name: layer_type(name) for name in LAYERS},
             "stitches": STITCHES, "ranges": RANGES, "routing": list(ROUTING)}

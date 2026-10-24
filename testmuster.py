@@ -1,8 +1,8 @@
-"""Testmuster zum Probesticken: 16 Felder mit Varianten der Stickparameter.
+"""Test pattern for trial stitching: 16 fields with variants of the stitch parameters.
 
-Jedes Feld trägt seine Nummer (gestickt, oben links). Die Legende mit allen
-Parametern wird als Textdatei daneben geschrieben. Nach dem Sticken die Felder
-vergleichen und die besten Werte in den Stil (styles/*.json) übernehmen.
+Each field carries its number (stitched, top left). The legend with all parameters
+is written next to it as a text file. After stitching, compare the fields and
+copy the best values into the style (styles/*.json).
 
     uv run testmuster.py -o out/testmuster
 """
@@ -20,7 +20,7 @@ COLOR = "#1a1a1a"
 WATER = "#2f6fb0"
 PULL = DEFAULT["fabric"]["pull_compensation"]
 
-# Siebensegment-Ziffern als je eine durchgehende Linie im 2 x 3 mm Kästchen
+# Seven-segment digits, each as one continuous line in a 2 x 3 mm box
 DIGITS = {
     "0": [(0, 0), (2, 0), (2, 3), (0, 3), (0, 0)],
     "1": [(1.5, 0), (1.5, 3)],
@@ -60,7 +60,7 @@ def fill(poly, method="tatami_fill", row_spacing=0.25, angle=0, underlay=True, s
 
 
 def s_curve(x, y, w=18, h=12, n=36):
-    """Glatter Bogen mit flachen Enden und enger Kurve in der Mitte."""
+    """Smooth arc with flat ends and a tight curve in the middle."""
     return [(x + w * t / n, y + h / 2 * (1 - math.cos(2 * math.pi * t / n))) for t in range(n + 1)]
 
 
@@ -69,20 +69,20 @@ def zigzag_street(x, y):
 
 
 def cell_content(n, x, y):
-    """Inhalt von Feld n (1..16) im Kästchen x..x+CELL, y+5..y+CELL."""
+    """Content of field n (1..16) in the box x..x+CELL, y+5..y+CELL."""
     y0 = y + 5
-    if n <= 4:  # Satinbreiten
+    if n <= 4:  # satin widths
         w = (0.8, 1.0, 1.3, 1.6)[n - 1]
         return [satin(s_curve(x + 2, y0 + 1), w)], f"Satin {w} mm breit, Stichabstand 0.4, Unterlage Mittellinie" + (
             " + Kontur" if w >= 1.5 else "")
     if n in (5, 6):
         d = 0.3 if n == 5 else 0.5
         return [satin(s_curve(x + 2, y0 + 1), 1.3, density=d)], f"Satin 1.3 mm, Stichabstand {d} mm"
-    if n == 7:  # Kreuzung Hauptstraße (1.3) mit abgeschnittener Tertiärstraße (0.9)
+    if n == 7:  # junction of a major road (1.3) with a cut-off tertiary road (0.9)
         return [satin([(x + 9, y0), (x + 11, y0 + 6.2)], 0.9), satin([(x + 11.6, y0 + 8.0), (x + 13, y0 + 15)], 0.9),
                 satin([(x + 1, y0 + 8), (x + 21, y0 + 6)], 1.3)], \
             "Kreuzung: Satin 1.3 mm durchgehend, Satin 0.9 mm davor und danach abgeschnitten"
-    if n == 8:  # Kanal zwischen zwei Uferstraßen
+    if n == 8:  # canal between two waterfront roads
         top = [(x + 1, y0 + 4), (x + 21, y0 + 6)]
         bottom = [(x + 1, y0 + 9.4), (x + 21, y0 + 11.4)]
         canal = Polygon([(x + 1, y0 + 5.05), (x + 21, y0 + 7.05), (x + 21, y0 + 10.35), (x + 1, y0 + 8.35)])
@@ -92,7 +92,7 @@ def cell_content(n, x, y):
         variants = {9: (1, 1.5), 10: (1, 2.0), 11: (3, 2.0), 12: (3, 2.5)}
         rep, sl = variants[n]
         items = [run(zigzag_street(x + 1, y0), rep, sl)]
-        for i, size in enumerate((1.5, 2.0, 3.0)):  # kleine Gebäudeblöcke
+        for i, size in enumerate((1.5, 2.0, 3.0)):  # small building blocks
             bx = x + 11 + i * 3.5
             r = box(bx, y0 + 0.5, bx + size, y0 + 0.5 + size).exterior.coords
             items.append(run(list(r), rep, sl))
@@ -118,7 +118,7 @@ def build():
         items = label(n, x + 0.5, y + 0.5) + content
         for it in items:
             it["trim_after"] = True
-        # alles Blaue zuerst sticken, damit es nur einen Farbwechsel gibt
+        # stitch everything blue first so there is only one color change
         blue += [it for it in items if it["color"] == WATER]
         layers.append((f"Feld {n}", [it for it in items if it["color"] != WATER]))
         legend.append(f"{n:>2}  {text}")

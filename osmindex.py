@@ -1,8 +1,8 @@
-"""Räumlicher Index (SQLite + R-Tree) über die für Stickkarten relevanten OSM-Objekte.
+"""Spatial index (SQLite + R-tree) over the OSM objects relevant for embroidery maps.
 
-Einmalig aus einer .osm.pbf bauen, danach liefert `query()` beliebige Ausschnitte
-in Millisekunden – das ersetzt den PBF-Durchlauf von extract.py pro Karte.
-Später kann an dieser Stelle genauso eine PostGIS-Abfrage stehen.
+Build it once from an .osm.pbf; afterwards `query()` returns any section in
+milliseconds – this replaces the per-map PBF pass of extract.py.
+A PostGIS query could just as well take its place later.
 
     python osmindex.py berlin-latest.osm.pbf data/berlin.sqlite
 """
@@ -107,8 +107,8 @@ class Index:
         return f"lokal ({self.meta.get('source')})"
 
     def query(self, lat, lon, width_m, height_m, margin=1.15):
-        """Alle Objekte im Rechteck (Mittelpunkt + Ausdehnung in m), auf den Ausschnitt zugeschnitten.
-        Format wie extract.py, aber mit fertigen shapely-Geometrien unter "geom"."""
+        """All objects in the rectangle (center + extent in m), clipped to the section.
+        Same format as extract.py, but with ready-made shapely geometries under "geom"."""
         dlat = height_m / 2 * margin / 111_320
         dlon = width_m / 2 * margin / (111_320 * math.cos(math.radians(lat)))
         clip = box(lon - dlon, lat - dlat, lon + dlon, lat + dlat)
@@ -125,7 +125,7 @@ class Index:
                 "source": {"name": self.describe(), "timestamp": self.meta.get("timestamp"), "cached": False}}
 
     def covers(self, bounds):
-        """Liegt das Rechteck (minx, miny, maxx, maxy) vollständig im Datenbereich?"""
+        """Does the rectangle (minx, miny, maxx, maxy) lie entirely within the data area?"""
         minx, miny, maxx, maxy = self.bounds
         return minx <= bounds[0] and miny <= bounds[1] and bounds[2] <= maxx and bounds[3] <= maxy
 

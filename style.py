@@ -1,9 +1,8 @@
-"""Stickstile: welche Objektart wie, in welcher Farbe und ob überhaupt gestickt wird.
+"""Embroidery styles: how, in which color and whether each object type is stitched at all.
 
-Ein Stil ist ein verschachteltes dict (bzw. eine JSON-Datei unter styles/), das nur
-die Abweichungen von DEFAULT enthalten muss. `load_style(name, overrides)` führt
-Standard, Voreinstellung und Änderungen (z.B. aus dem Web-Editor) zusammen und
-prüft das Ergebnis.
+A style is a nested dict (or a JSON file under styles/) that only needs to contain
+the deviations from DEFAULT. `load_style(name, overrides)` merges default, preset
+and changes (e.g. from the web editor) and validates the result.
 """
 import copy
 import json
@@ -12,7 +11,7 @@ from pathlib import Path
 
 STYLES_DIR = Path(__file__).parent / "styles"
 
-# Linienklassen in absteigender Priorität: höhere schneiden/verdrängen niedrigere
+# Line classes in descending priority: higher ones cut/displace lower ones
 LINE_LAYERS = ("major", "medium", "minor", "rail")
 AREA_LAYERS = ("water", "green", "buildings")
 LAYERS = LINE_LAYERS + AREA_LAYERS + ("frame",)
@@ -50,18 +49,18 @@ DEFAULT = {
                   "stitch": "run", "repeats": 3, "stitch_length": 2.5},
     },
     "generalization": {
-        "simplify": 0.2,             # Douglas-Peucker-Toleranz
-        "min_line": 2.0,             # kürzere Linienstücke fallen weg
-        "min_area": 4.0,             # kleinere Flächen/Löcher fallen weg
-        "min_feature": 0.6,          # schmalere Flächenteile fallen weg
-        "building_merge": 0.6,       # Gebäude mit kleinerem Abstand verschmelzen zu Blöcken
-        "min_building": 2.0,         # kleinere Gebäudeblöcke/Innenhöfe fallen weg
-        "road_clearance": 0.2,       # Abstand Füllflächen <-> Linien
-        "parallel_min_length": 4.0,  # ab dieser Länge gilt eine Überlappung als Parallele
+        "simplify": 0.2,             # Douglas-Peucker tolerance
+        "min_line": 2.0,             # shorter line pieces are dropped
+        "min_area": 4.0,             # smaller areas/holes are dropped
+        "min_feature": 0.6,          # narrower area parts are dropped
+        "building_merge": 0.6,       # buildings closer than this merge into blocks
+        "min_building": 2.0,         # smaller building blocks/courtyards are dropped
+        "road_clearance": 0.2,       # clearance between fill areas <-> lines
+        "parallel_min_length": 4.0,  # overlaps from this length on count as parallel
     },
 }
 
-# Routing-Modi: wie viel Laufweg ist ein Fadenschnitt wert?
+# Routing modes: how much travel stitching is a thread trim worth?
 ROUTING = {
     "balanced": {"jump_distance": 1.0, "snap_distance": 1.0, "ring_snap": 2.0,
                  "max_travel": 25.0, "trim_penalty": 15.0},
@@ -123,7 +122,7 @@ def validate(style):
 
 
 def list_presets():
-    """{id: vollständiger Stil} für alle JSON-Dateien unter styles/."""
+    """{id: complete style} for all JSON files under styles/."""
     return {p.stem: load_style(p.stem) for p in sorted(STYLES_DIR.glob("*.json"))}
 
 
@@ -138,7 +137,7 @@ def load_style(name_or_path="toner-wasser", overrides=None):
 
 
 def set_path(overrides, dotted, value):
-    """'layers.water.color' = '#ff0000' -> verschachteltes dict (für die Kommandozeile)."""
+    """'layers.water.color' = '#ff0000' -> nested dict (for the command line)."""
     *parents, last = dotted.split(".")
     node = overrides
     for p in parents:

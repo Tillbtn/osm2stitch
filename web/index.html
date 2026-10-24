@@ -214,7 +214,7 @@
 const $ = s => document.querySelector(s);
 const state = { orient: "landscape", tab: "png", job: null, bounds: null, styles: null, style: null, open: new Set() };
 const STITCH_LABELS = { satin: "Satin", run: "Geradstich", tatami: "Füllung", contour: "Konturfüllung", outline: "Umriss" };
-const FIELDS = {  // welche Detailfelder je Stickart
+const FIELDS = {  // which detail fields per stitch type
   satin: [["width", "Breite (mm)", 0.1], ["density", "Stichabstand (mm)", 0.05]],
   run: [["repeats", "Wiederholungen"], ["stitch_length", "Stichlänge (mm)", 0.1]],
   outline: [["repeats", "Wiederholungen"], ["stitch_length", "Stichlänge (mm)", 0.1]],
@@ -228,7 +228,7 @@ const map = L.map("map", { zoomSnap: 0.25 }).setView(START, 15);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }).addTo(map);
-// Rahmen als feste Maske in der Kartenmitte: die Karte wird darunter verschoben
+// Frame as a fixed mask in the map center: the map is moved underneath it
 const frameBox = document.createElement("div");
 frameBox.id = "frameBox";
 map.getContainer().appendChild(frameBox);
@@ -275,7 +275,7 @@ $("#orient").addEventListener("click", e => {
   update(); fit();
 });
 
-// ---- Stil-Editor
+// ---- Style editor
 function applyPreset(id) {
   state.style = structuredClone(state.styles.presets[id]);
   $("#presetDesc").textContent = state.style.description;
@@ -339,7 +339,7 @@ fetch("/api/styles").then(r => r.json()).then(s => {
 });
 
 fetch("/api/info").then(r => r.json()).then(info => {
-  if (info.bounds) {  // regionale Daten: Datenbereich einzeichnen
+  if (info.bounds) {  // regional data: draw the data area
     const [minx, miny, maxx, maxy] = info.bounds;
     state.bounds = L.latLngBounds([miny, minx], [maxy, maxx]);
     L.rectangle(state.bounds, { color: "#888", weight: 1.5, dashArray: "6 6", fill: false, interactive: false }).addTo(map);
@@ -349,7 +349,7 @@ fetch("/api/info").then(r => r.json()).then(info => {
 });
 update(); fit();
 
-// Suche über Nominatim, auf den Datenbereich beschränkt
+// Search via Nominatim, restricted to the data area
 $("#searchForm").addEventListener("submit", async e => {
   e.preventDefault();
   const q = $("#search").value.trim(); if (!q) return;
@@ -364,7 +364,7 @@ $("#searchForm").addEventListener("submit", async e => {
   } catch { $("#searchMsg").textContent = "Suche nicht erreichbar."; }
 });
 
-// Auftrag starten und verfolgen
+// Start and track the job
 $("#go").addEventListener("click", async () => {
   const c = map.getCenter(), [w, h] = sizeMm();
   const body = {

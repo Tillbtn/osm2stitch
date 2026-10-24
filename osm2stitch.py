@@ -1,11 +1,11 @@
-"""Erzeugt aus einem OSM-Ausschnitt eine Ink/Stitch-fertige SVG.
+"""Turns an OSM section into an SVG ready for Ink/Stitch.
 
-Wie welche Objektart gestickt wird (Stickart, Breite, Dichte, Farbe, an/aus),
-steht im Stil (siehe style.py und styles/*.json). Der Standard ist an Stamen
-Toner angelehnt: Straßen als Satin bzw. Dreifachstich, Gebäudeblöcke als Umriss,
-Parks als Konturfüllung, Wasser als Fläche.
+How each object type is stitched (stitch type, width, density, color, on/off)
+is defined in the style (see style.py and styles/*.json). The default is modeled
+on Stamen Toner: roads as satin or triple stitch, building blocks as outlines,
+parks as contour fill, water as a filled area.
 
-Alle Maße im Code sind in mm auf dem Stoff.
+All dimensions in the code are in mm on the fabric.
 """
 import argparse
 import json
@@ -34,13 +34,13 @@ RAIL = {"rail", "light_rail", "subway"}
 GREEN = {("leisure", "park"), ("landuse", "forest"), ("natural", "wood"), ("landuse", "cemetery")}
 WATER = {("natural", "water"), ("waterway", "riverbank")}
 
-# Parallele Linien einer Klasse näher als dieser Abstand (in Metern, mindestens aber
-# x Linienbreite) werden zu einer Mittellinie zusammengefasst
+# Parallel lines of a class closer than this distance (in meters, but at least
+# x line width) are merged into one centerline
 MERGE_M = {"major": 30, "medium": 25, "minor": 0, "rail": 20}
 MERGE_FACTOR = {"major": 1.1, "medium": 1.1, "minor": 1.5, "rail": 2.0}
 
 
-# ---------------------------------------------------------------- Geometrie
+# ---------------------------------------------------------------- Geometry
 
 def lines_of(geom):
     if geom.is_empty:
@@ -63,7 +63,7 @@ def polys_of(geom):
 
 
 def clean_area(geom, s, min_area=None):
-    """Morphologisch öffnen/schließen, vereinfachen, Kleinkram entfernen."""
+    """Morphological opening/closing, simplify, remove small bits."""
     a = s["min_feature"] / 2
     geom = geom.buffer(-a).buffer(a).buffer(a).buffer(-a)
     geom = geom.simplify(s["simplify"])
@@ -83,8 +83,8 @@ def merge_lines(lines, s):
 
 
 def drop_parallel(lines, blocker, s):
-    """Entfernt lange Abschnitte, die innerhalb von `blocker` verlaufen (z.B. zweite
-    Richtungsfahrbahn), lässt aber kurze Überlappungen an Kreuzungen stehen."""
+    """Removes long sections running inside `blocker` (e.g. the second carriageway
+    of a dual carriageway), but keeps short overlaps at junctions."""
     if blocker is None or blocker.is_empty:
         return lines
     keep = []
@@ -100,10 +100,10 @@ def drop_parallel(lines, blocker, s):
 
 
 def centerlines(lines, d, s):
-    """Mittelachse aller Linien einer Klasse: puffern (Radius d), vereinigen und das
-    Skelett der Fläche über ein Voronoi-Diagramm bestimmen. Richtungsfahrbahnen und
-    Gleisbündel mit weniger als 2*d Abstand werden so zu einer Linie, Kreuzungen
-    treffen sich in einem Punkt."""
+    """Medial axis of all lines of a class: buffer (radius d), union, and determine the
+    skeleton of the area via a Voronoi diagram. Dual carriageways and bundles of
+    tracks less than 2*d apart thus become one line, and junctions meet in a
+    single point."""
     if not lines:
         return []
     poly = unary_union([l.buffer(d) for l in lines]).simplify(d / 10)
@@ -112,7 +112,7 @@ def centerlines(lines, d, s):
     shapely.prepare(poly)
     skeleton = unary_union(edges[shapely.contains_properly(poly, edges)])
 
-    # Stichleitungen des Skeletts (zu den Ecken der Pufferfläche) kappen
+    # prune the skeleton's spurs (towards the corners of the buffer area)
     for _ in range(6):
         pieces = lines_of(shapely.line_merge(skeleton))
         degree = {}
@@ -129,7 +129,7 @@ def centerlines(lines, d, s):
 
 
 def cut_lines(lines, cutter, s):
-    """Linien an einer Fläche abschneiden (Satin endet an querender Satin)."""
+    """Cut lines at an area (satin ends at a crossing satin)."""
     out = []
     for line in lines:
         out += [p for p in lines_of(line.difference(cutter)) if p.length >= s["min_line"]]
@@ -137,7 +137,7 @@ def cut_lines(lines, cutter, s):
 
 
 def split_sharp(line, max_angle=60):
-    """Satinsäulen an spitzen Knicken teilen, damit die Schienen sich nicht kreuzen."""
+    """Split satin columns at sharp bends so the rails do not cross."""
     pts = list(line.coords)
     parts, cur = [], [pts[0]]
     for a, b, c in zip(pts, pts[1:], pts[2:]):
@@ -154,7 +154,7 @@ def split_sharp(line, max_angle=60):
 
 
 def satin_rails(line, width):
-    """Zwei Schienen mit gleicher Knotenzahl (Gehrung an jedem Knoten)."""
+    """Two rails with the same number of nodes (mitered at every node)."""
     pts = list(line.coords)
     normals = []
     for i in range(len(pts) - 1):
@@ -180,10 +180,10 @@ def satin_rails(line, width):
     return left, right
 
 
-# ---------------------------------------------------------------- Reihenfolge
+# ---------------------------------------------------------------- Ordering
 
 def order_paths(items, start):
-    """Greedy nearest neighbour; Linien dürfen umgedreht werden."""
+    """Greedy nearest neighbour; lines may be reversed."""
     items = list(items)
     ordered, pos = [], start
     while items:
@@ -207,19 +207,19 @@ def key(c):
 
 
 class Network:
-    """Linien-Netz für Laufwege zwischen zwei Objekten.
+    """Line network for travel paths between two objects.
 
-    Jede Kante gehört zu einem Objekt (owner = (art, nr, farbe, deckt_ab)) oder ist
-    eine kurze Anbindung (owner None). Ein Laufweg darf über eine Kante führen, wenn
-    sie später ohnehin zugestickt wird (noch nicht gestickt und Satin bzw.
-    Mehrfachstich) oder wenn sie in derselben Farbe als Geradstich schon da ist."""
+    Each edge belongs to an object (owner = (kind, no, color, covers)) or is a
+    short connector (owner None). A travel path may use an edge if it will be
+    stitched over later anyway (not yet stitched and satin or multi-pass stitch)
+    or if it already exists as a running stitch in the same color."""
 
     def __init__(self, lines, s):
         geoms = [l for l, _ in lines]
         tree = STRtree(geoms)
         connectors = []
         for i, line in enumerate(geoms):
-            # offene Linien an beiden Enden anbinden, Ringe (Gebäude) an ihrer nächsten Stelle
+            # connect open lines at both ends, rings (buildings) at their nearest point
             probes = [line] if line.is_ring else [Point(line.coords[0]), Point(line.coords[-1])]
             snap = s["ring_snap"] if line.is_ring else s["snap_distance"]
             for p in probes:
@@ -231,13 +231,13 @@ class Network:
                     if d < 1e-6:
                         best = None
                         break
-                    # Umrisse bevorzugt an Straßen/Bahn statt an Nachbarumrisse anbinden
+                    # prefer connecting outlines to roads/rail rather than to neighboring outlines
                     rank = (geoms[j].is_ring, d) if line.is_ring else (False, d)
                     if best is None or rank < best[0]:
                         best = (rank, j)
                 if best:
                     connectors.append(LineString(nearest_points(p, geoms[best[1]])))
-        # Graph aus Einzelsegmenten, damit jeder Stützpunkt ein Knoten ist
+        # graph of individual segments so every vertex is a node
         self.g = nx.Graph()
         for piece in lines_of(unary_union(geoms + connectors)):
             mid = piece.interpolate(0.5, normalized=True)
@@ -252,8 +252,8 @@ class Network:
                     self.g.add_edge(a, b, weight=math.dist(c1, c2), coords=[c1, c2], owner=owner)
 
     def route(self, items, pos, sewn, s, color):
-        """Greedy: immer das Objekt als nächstes, das über das Netz (oder mit
-        Schnitt) am billigsten erreichbar ist. Liefert Objekte + Laufwege."""
+        """Greedy: always pick next the object that is cheapest to reach via the
+        network (or with a trim). Returns objects + travel paths."""
         def weight(u, v, d):
             o = d["owner"]
             if o is None:
@@ -322,8 +322,8 @@ def poly_item(poly, kind, **kw):
 
 
 def order_colors(colors, prev=None, nxt=None):
-    """Farbreihenfolge innerhalb einer Stufe: Anschlussfarben an den Rand legen,
-    damit möglichst wenige Farbwechsel entstehen."""
+    """Color order within a stage: put connecting colors at the edges to keep
+    color changes to a minimum."""
     return sorted(colors, key=lambda c: (c != prev, c == nxt))
 
 
@@ -406,7 +406,7 @@ def write_svg(path, layers, w, h):
 
 
 def write_preview_svg(path, layers, w, h, fabric="#f5f2ea"):
-    """Schnelle Ansicht fürs Web: Satins als breite Linie, Laufwege ausgeblendet."""
+    """Quick view for the web: satins as wide lines, travel paths hidden."""
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">',
            f'<rect width="{w}" height="{h}" fill="{fabric}"/>']
     for _, items in layers:
@@ -427,10 +427,10 @@ def write_preview_svg(path, layers, w, h, fabric="#f5f2ea"):
     Path(path).write_text("\n".join(out))
 
 
-# ---------------------------------------------------------------- Hauptteil
+# ---------------------------------------------------------------- Main
 
 def classify(f):
-    """OSM-Objekt -> Ebene des Stils (oder None)."""
+    """OSM object -> style layer (or None)."""
     t = f["tags"]
     if t.get("tunnel", "no") != "no" or t.get("covered", "no") != "no":
         return None
@@ -461,8 +461,8 @@ def classify(f):
 
 
 def spiral_ok(poly, spacing):
-    """Ink/Stitch kann eine Konturfüllung nur dann als einzelne Spirale sticken, wenn die
-    Fläche keine Löcher hat und mindestens eine Windung hineinpasst."""
+    """Ink/Stitch can only stitch a contour fill as a single spiral if the area has
+    no holes and at least one turn fits inside."""
     inner, d = poly, 0.0
     while True:
         if not isinstance(inner, Polygon) or inner.interiors:
@@ -475,7 +475,7 @@ def spiral_ok(poly, spacing):
 
 
 def line_width(cfg):
-    """Optische Breite einer Linie auf dem Stoff (für Abstände und Verdrängung)."""
+    """Visual width of a line on the fabric (for clearances and displacement)."""
     if cfg["stitch"] == "satin":
         return cfg["width"]
     return 0.5 if cfg["repeats"] >= 3 else 0.3
@@ -490,7 +490,7 @@ def build(data, width_m, w_mm, h_mm, style):
     zone = int((lon + 180) // 6) + 1
     proj = Transformer.from_crs("EPSG:4326", f"+proj=utm +zone={zone} +ellps=GRS80 +units=m", always_xy=True)
     cx, cy = proj.transform(lon, lat)
-    scale = w_mm / width_m  # mm pro m
+    scale = w_mm / width_m  # mm per m
 
     def to_mm(xy):
         x, y = proj.transform(xy[:, 0], xy[:, 1])
@@ -507,12 +507,12 @@ def build(data, width_m, w_mm, h_mm, style):
         if not geom.is_empty:
             groups[g].append(geom)
 
-    # Linien in absteigender Priorität: zusammenfassen, Parallelen zu höheren Klassen
-    # entfernen, Satin an querender Satin abschneiden
+    # Lines in descending priority: merge, remove parallels to higher classes,
+    # cut satin at crossing satin
     lines, covered, satin_cover = {}, None, None
     for name in LINE_LAYERS:
         cfg, w = L[name], line_width(L[name])
-        # über den Rahmen hinaus vorhandene Linien sorgen dafür, dass das Skelett bis zum Rand reicht
+        # lines extending beyond the frame make the skeleton reach all the way to the edge
         ls = centerlines(groups[name], max(w * MERGE_FACTOR[name], MERGE_M[name] / width_m * w_mm) / 2, s)
         ls = [p for l in ls for p in lines_of(l.intersection(frame))]
         if cfg["stitch"] == "satin" and satin_cover is not None:
@@ -528,7 +528,7 @@ def build(data, width_m, w_mm, h_mm, style):
             if cfg["stitch"] == "satin":
                 satin_cover = area if satin_cover is None else satin_cover.union(area)
 
-    # Flächen: Platz für Linien freihalten, damit nichts übereinander gestickt wird
+    # Areas: keep space free for lines so nothing is stitched on top of each other
     keepout = covered.buffer(s["road_clearance"]) if covered is not None else Polygon()
     areas = {}
     areas["water"] = clean_area(unary_union(groups["water"]).difference(keepout), s)
@@ -540,7 +540,7 @@ def build(data, width_m, w_mm, h_mm, style):
                                 .difference(areas["water"].buffer(0.5))
                                 .difference(areas["buildings"].buffer(0.3)), s)
 
-    # Objekte erzeugen; Koordinaten gerundet, damit sie exakt auf Netzknoten liegen
+    # Create objects; coordinates rounded so they lie exactly on network nodes
     net_lines = []
 
     def add_lines(geoms, kind, cfg, **kw):
@@ -584,12 +584,12 @@ def build(data, width_m, w_mm, h_mm, style):
         else:
             runs += add_lines(lines[name], "run", cfg, layer=name, **run_kw(cfg))
     if "frame" in enabled:
-        # Rahmen als Ring im Netz: Straßen enden auf ihm, er dient als Rundweg ohne Schnitt
+        # frame as a ring in the network: roads end on it, it serves as a loop path without trims
         runs += add_lines([frame.exterior], "run", L["frame"], ring=True, layer="frame", **run_kw(L["frame"]))
     net = Network(net_lines, s)
 
-    # Stickreihenfolge: Flächen -> Geradstich -> Satin (niedrige vor hoher Priorität),
-    # innerhalb einer Stufe nach Farbe gruppiert
+    # Stitch order: areas -> running stitch -> satin (low before high priority),
+    # grouped by color within a stage
     satin_stages = [(name, satins[name]) for name in reversed(LINE_LAYERS) if satins.get(name)]
     first_satin = L[satin_stages[0][0]]["color"] if satin_stages else None
     run_colors = order_colors({it["color"] for it in runs}, nxt=first_satin)
@@ -621,7 +621,7 @@ def build(data, width_m, w_mm, h_mm, style):
 
 
 def strip_spirals(layers):
-    """Konturfüllungen wieder auf das Standardverfahren setzen; True, falls es welche gab."""
+    """Reset contour fills to the default method; True if there were any."""
     found = False
     for _, items in layers:
         for it in items:

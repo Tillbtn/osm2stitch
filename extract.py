@@ -1,8 +1,7 @@
-"""Schneidet die für die Stickkarte relevanten OSM-Objekte aus einer .osm.pbf aus.
+"""Cuts the OSM objects relevant for the embroidery map out of an .osm.pbf.
 
-Ergebnis ist eine kleine JSON-Datei (WGS84-WKT + ausgewählte Tags), damit der
-eigentliche Kartengenerator schnell iteriert werden kann, ohne jedes Mal die
-ganze PBF zu lesen.
+The result is a small JSON file (WGS84 WKT + selected tags), so the actual map
+generator can be iterated on quickly without reading the whole PBF every time.
 """
 import argparse
 import json
@@ -47,7 +46,7 @@ def main():
     for obj in fp:
         try:
             if obj.is_way():
-                # schneller Vorab-Test über die Knoten, bevor Geometrie gebaut wird
+                # quick pre-check on the nodes before building the geometry
                 if not any(minx <= n.lon <= maxx and miny <= n.lat <= maxy
                            for n in obj.nodes if n.location.valid()):
                     continue

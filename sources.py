@@ -1,12 +1,12 @@
-"""Datenquellen für OSM-Ausschnitte.
+"""Data sources for OSM sections.
 
-Alle Quellen liefern über `query(lat, lon, width_m, height_m)` dasselbe Format:
+All sources return the same format via `query(lat, lon, width_m, height_m)`:
 {"center": [lat, lon], "features": [{"kind": "way"|"area", "tags": {...}, "geom": shapely}],
  "source": {"name": ..., "timestamp": ..., "cached": bool, "note": ...}}
 
-- PostpassSource: weltweit über die öffentliche PostGIS-API der Geofabrik, mit Zwischenspeicher
-- osmindex.Index: lokaler SQLite-Index aus einer PBF (regional)
-- FallbackSource: erst Postpass, bei Störung der lokale Index (falls er den Ausschnitt abdeckt)
+- PostpassSource: worldwide via Geofabrik's public PostGIS API, with a cache
+- osmindex.Index: local SQLite index built from a PBF (regional)
+- FallbackSource: Postpass first, the local index on failure (if it covers the section)
 """
 import gzip
 import json
@@ -29,7 +29,7 @@ USER_AGENT = "osm-stickkarte/0.1 (Stickkarten aus OSM-Daten, Demo)"
 
 
 class SourceError(RuntimeError):
-    """Datenquelle nicht erreichbar oder Anfrage abgelehnt."""
+    """Data source unreachable or request rejected."""
 
 
 def bbox_around(lat, lon, width_m, height_m, margin=1.0):
@@ -47,7 +47,7 @@ def _in(values):
 
 
 def postpass_sql(minx, miny, maxx, maxy):
-    """Eine Abfrage für Linien und Flächen, gefiltert auf das, was osm2stitch verwendet."""
+    """A single query for lines and areas, filtered to what osm2stitch uses."""
     highways = MAJOR | MEDIUM | MINOR | {f"{v}_link" for v in MAJOR | MEDIUM}
     bbox = f"ST_MakeEnvelope({minx:.6f},{miny:.6f},{maxx:.6f},{maxy:.6f},4326)"
     area_tags = " OR ".join(f"tags @> {_sql_str(json.dumps({k: v}))}::jsonb" for k, v in sorted(WATER | GREEN))
@@ -61,7 +61,7 @@ def postpass_sql(minx, miny, maxx, maxy):
 
 
 def clip(features, bounds):
-    """Geometrien auf den Ausschnitt zuschneiden, leere verwerfen."""
+    """Clip geometries to the section, drop empty ones."""
     if not features:
         return []
     clipped = shapely.intersection([f["geom"] for f in features], box(*bounds))
@@ -70,11 +70,11 @@ def clip(features, bounds):
 
 class PostpassSource:
     name = "Postpass"
-    bounds = None  # weltweit
+    bounds = None  # worldwide
 
     def __init__(self, cache_dir, url=POSTPASS_URL, ttl_hours=24, timeout=90, fetch_margin=1.4):
         self.url, self.timeout, self.ttl = url, timeout, ttl_hours * 3600
-        self.fetch_margin = fetch_margin  # mehr Rand holen, damit kleine Verschiebungen aus dem Cache kommen
+        self.fetch_margin = fetch_margin  # fetch extra margin so small shifts are served from the cache
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         with self._db() as con:
@@ -107,7 +107,7 @@ class PostpassSource:
         (self.cache_dir / name).write_bytes(gzip.compress(raw))
         with self._db() as con:
             con.execute("INSERT INTO cache VALUES (?,?,?,?,?,?,?)", (name, *bounds, time.time(), timestamp))
-            # abgelaufene Einträge aufräumen
+            # clean up expired entries
             for (old,) in con.execute("SELECT file FROM cache WHERE fetched < ?", (time.time() - self.ttl,)).fetchall():
                 (self.cache_dir / old).unlink(missing_ok=True)
             con.execute("DELETE FROM cache WHERE fetched < ?", (time.time() - self.ttl,))
@@ -120,7 +120,7 @@ class PostpassSource:
                 return r.read()
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace").strip()
-            detail = "" if detail.startswith("<") else f": {detail[:300]}"  # HTML-Fehlerseiten weglassen
+            detail = "" if detail.startswith("<") else f": {detail[:300]}"  # omit HTML error pages
             raise SourceError(f"Postpass antwortet mit Fehler {e.code}{detail}") from e
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise SourceError(f"Postpass nicht erreichbar: {getattr(e, 'reason', e)}") from e
@@ -148,7 +148,7 @@ class PostpassSource:
 
 
 class FallbackSource:
-    """Erst die Hauptquelle; schlägt sie fehl, die Ausweichquelle (falls sie den Ausschnitt abdeckt)."""
+    """The primary source first; if it fails, the fallback source (if it covers the section)."""
 
     def __init__(self, primary, fallback):
         self.primary, self.fallback = primary, fallback
