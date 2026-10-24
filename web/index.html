@@ -331,14 +331,14 @@ $("#resetStyle").addEventListener("click", () => applyPreset($("#preset").value)
 $("#fabric").addEventListener("input", () => state.style.fabric.color = $("#fabric").value);
 $("#routing").addEventListener("change", () => state.style.routing.mode = $("#routing").value);
 
-fetch("/api/styles").then(r => r.json()).then(s => {
+fetch("api/styles").then(r => r.json()).then(s => {
   state.styles = s;
   $("#preset").innerHTML = Object.entries(s.presets).map(([id, p]) =>
     `<option value="${id}" ${id === "toner-wasser" ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   applyPreset($("#preset").value);
 });
 
-fetch("/api/info").then(r => r.json()).then(info => {
+fetch("api/info").then(r => r.json()).then(info => {
   if (info.bounds) {  // regional data: draw the data area
     const [minx, miny, maxx, maxy] = info.bounds;
     state.bounds = L.latLngBounds([miny, minx], [maxy, maxx]);
@@ -375,7 +375,7 @@ $("#go").addEventListener("click", async () => {
   $("#formError").hidden = true; $("#go").disabled = true; $("#result").hidden = true;
   for (const li of $("#steps").children) li.className = "";
   try {
-    const r = await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await fetch("api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
     if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Ungültige Eingaben: " +
       (j.detail || []).map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(", "));
@@ -387,7 +387,7 @@ function showError(msg) { $("#formError").textContent = msg; $("#formError").hid
 
 async function poll() {
   const id = state.job;
-  const j = await (await fetch(`/api/jobs/${id}`)).json();
+  const j = await (await fetch(`api/jobs/${id}`)).json();
   if (id !== state.job) return;
   const order = ["queued", "loading", "geometry", "inkstitch", "done"], cur = order.indexOf(j.status);
   for (const li of $("#steps").children) {

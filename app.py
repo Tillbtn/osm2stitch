@@ -68,7 +68,7 @@ class Job:
     def public(self, position=None):
         return {"id": self.id, "status": self.status, "error": self.error, "queue_position": position,
                 "geometry": self.geometry, "result": self.result, "data_source": self.data_source,
-                "files": {k: f"/files/{self.id}/{v}" for k, v in self.files.items()}}
+                "files": {k: f"files/{self.id}/{v}" for k, v in self.files.items()}}
 
 
 app = FastAPI(title="OSM-Stickkarte")
