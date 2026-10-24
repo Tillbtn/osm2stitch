@@ -18,24 +18,46 @@ Ink/Stitch muss unter `~/.config/inkscape/extensions/inkstitch` installiert sein
 
 2. Karte erzeugen (schnell, beliebig oft mit anderen Parametern):
 
-       uv run osm2stitch.py kreuzberg.json -o out/kreuzberg
-       uv run osm2stitch.py kreuzberg.json -o out/kreuzberg_blau --water-color "#2f6fb0"
+       uv run osm2stitch.py kreuzberg.json -o out/kreuzberg --width-m 800
+       uv run osm2stitch.py kreuzberg.json -o out/bunt --width-m 800 --style bunt
+       uv run osm2stitch.py kreuzberg.json -o out/test --set layers.major.width=1.6 --set routing.mode=balanced
 
-   Mit Gebäuden lieber einen kleineren Ausschnitt wählen:
-
-       uv run osm2stitch.py kreuzberg.json -o out/kreuzberg_800 --width-m 800 --water-color "#2f6fb0"
-
-   Optionen: `--width-m` (Ausschnittbreite in Metern, Standard 1600),
-   `--buildings outline|fill|none` (Gebäudeblöcke als Umriss, Standard; offene
-   Füllung – zerfasert bei schmalen Blöcken; oder weglassen),
-   `--size` (Stickgröße in mm, Standard `100x100`), `--format` (pes, dst, jef, …),
-   `--no-inkstitch` (nur SVG).
+   Optionen: `--width-m` (Ausschnittbreite in Metern), `--size` (Stickgröße in mm,
+   Standard `100x100`), `--style` (Voreinstellung aus `styles/` oder Pfad zu einer
+   JSON-Datei), `--set PFAD=WERT` (einzelne Stilwerte ändern), `--format` (pes,
+   dst, jef, …), `--no-inkstitch` (nur SVG).
 
 Ergebnis: `out/<name>.svg` (in Inkscape nachbearbeitbar), `out/<name>.pes`,
 `out/<name>_vorschau.png`.
 
-Stilparameter (Satinbreiten, Mindestgrößen, Vereinfachung) stehen in `STYLE`
-in `osm2stitch.py`.
+## Stile
+
+Ein Stil legt pro Ebene (Haupt-, Tertiär-, Nebenstraßen, Bahn, Gewässer, Parks,
+Gebäude, Rahmen) fest, ob, wie (Satin, Geradstich, Füllung, Konturfüllung,
+Umriss) und in welcher Farbe gestickt wird, dazu Generalisierung und
+Fadenführung. Standardwerte stehen in `style.py`, Voreinstellungen in
+`styles/*.json` – dort genügen die Abweichungen vom Standard:
+
+| Stil | Beschreibung |
+|---|---|
+| `toner-wasser` | Schwarz wie Stamen Toner, Wasser blau (2 Garne, Standard) |
+| `toner` | einfarbig, Wasser als offene Füllung |
+| `minimal` | nur Straßen und Uferlinien |
+| `bunt` | Straßen dunkel, Wasser blau, Parks grün, Gebäude grau (4 Garne) |
+
+Fadenführung `continuous` (Standard) verbindet möglichst alles über Laufwege, die
+später überstickt werden (~70 % weniger Fadenschnitte); `balanced` schneidet
+früher.
+
+## Testmuster
+
+    uv run testmuster.py -o out/testmuster
+
+16 nummerierte Felder (92 × 92 mm) mit Varianten von Satinbreite und -dichte,
+Kreuzung, Kanal zwischen Satinstraßen, Geradstich-Wiederholungen und
+Stichlängen, Füllungen und Konturfüllung. Die Parameter je Feld stehen in
+`out/testmuster_legende.txt`. Nach dem Probesticken die besten Werte in den Stil
+übernehmen.
 
 ## Demo-Website (lokal)
 
@@ -50,14 +72,16 @@ in `osm2stitch.py`.
 Ablauf pro Auftrag: Ausschnitt aus dem Index (~0,05 s) → Generalisierung und
 Routing in Python (<1 s) → Ink/Stitch berechnet Stickdatei und Vorschau
 parallel (~5–15 s). Aufträge laufen nacheinander über eine Warteschlange; die
-Ergebnisse liegen in `web_jobs/<id>/` (Stickdatei, SVG, Vorschau, ZIP mit
-LIESMICH inkl. OSM-Quellenangabe).
+Ergebnisse liegen in `web_jobs/<id>/` (Stickdatei, SVG, Vorschau, verwendeter
+Stil als `stil.json`, ZIP mit LIESMICH inkl. OSM-Quellenangabe).
 
 Aufbau:
 
 | Datei | Aufgabe |
 |---|---|
 | `osmindex.py` | PBF → SQLite/R-Tree; `Index.query()` liefert Ausschnitte (später austauschbar gegen PostGIS) |
+| `style.py`, `styles/` | Stil-Schema, Voreinstellungen, Prüfung |
 | `osm2stitch.py` | Generalisierung, Stickarten, Routing, SVG für Ink/Stitch + Schnellansicht |
+| `testmuster.py` | Probestick-Muster mit Parametervarianten |
 | `app.py` | FastAPI-Server, Warteschlange, Ink/Stitch-Aufruf, Statistik, ZIP |
 | `web/index.html` | Oberfläche (Leaflet-Karte mit Rahmen, Einstellungen, Vorschau, Downloads) |

@@ -74,6 +74,16 @@
   .downloads { display: grid; gap: 6px; }
   .downloads a { display: block; text-align: center; text-decoration: none; padding: 9px; border-radius: 8px; border: 1px solid var(--line); color: var(--text); }
   .downloads a.primary { background: var(--accent); color: var(--accent-text); border: none; font-weight: 600; }
+  .layer { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; background: var(--bg); }
+  .layer.off { opacity: .55; }
+  .layer-head { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 8px; align-items: center; padding: 6px 8px; }
+  .layer-head .name { font-size: 14px; }
+  .layer-head select { width: auto; margin: 0; padding: 4px 6px; font-size: 13px; }
+  .layer-head input[type=color] { width: 32px; height: 26px; }
+  .layer-head .more { padding: 2px 7px; font-size: 13px; line-height: 1.2; }
+  .layer-body { padding: 4px 10px 8px 34px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .layer-body label { font-size: 13px; margin-bottom: 6px; }
+  .layer-body input[type=number], .layer-body select { padding: 4px 6px; font-size: 13px; }
   .foot { font-size: 12px; color: var(--muted); margin-top: 18px; }
   .foot a { color: inherit; }
   .scaleinfo { font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -134,32 +144,28 @@
   </section>
 
   <section>
-    <h2>Inhalt</h2>
-    <label>Gebäude
-      <select id="buildings">
-        <option value="outline">Blöcke als Umriss</option>
-        <option value="none">weglassen</option>
-        <option value="fill">offene Füllung (experimentell)</option>
-      </select>
+    <h2>Stil</h2>
+    <label>Voreinstellung
+      <select id="preset"></select>
     </label>
-    <div class="checks">
-      <label class="check"><input type="checkbox" data-layer="minor" checked> Nebenstraßen</label>
-      <label class="check"><input type="checkbox" data-layer="rail" checked> Bahn</label>
-      <label class="check"><input type="checkbox" data-layer="water" checked> Gewässer</label>
-      <label class="check"><input type="checkbox" data-layer="green" checked> Parks &amp; Wald</label>
-      <label class="check"><input type="checkbox" data-layer="frame" checked> Rahmenlinie</label>
+    <p class="hint" id="presetDesc"></p>
+    <div class="layers" id="layers"></div>
+    <div class="row" style="margin-top:8px">
+      <label class="check" style="flex:0 0 auto"><input type="color" id="fabric"> Stofffarbe (Vorschau)</label>
+      <button type="button" id="resetStyle" style="flex:0 0 auto;font-size:13px">Zurücksetzen</button>
     </div>
-    <p class="hint">Haupt- und Tertiärstraßen sind immer als Satinstich enthalten.</p>
+    <p class="hint" id="threadCount"></p>
   </section>
 
   <section>
-    <h2>Garn &amp; Format</h2>
-    <div class="row">
-      <label class="check" style="flex:0 0 auto"><input type="color" id="color" value="#1a1a1a"> Hauptfarbe</label>
-      <label class="check" style="flex:0 0 auto"><input type="checkbox" id="waterOn" checked>
-        <input type="color" id="waterColor" value="#2f6fb0"> Wasser</label>
-    </div>
-    <p class="hint">Ohne eigene Wasserfarbe wird Wasser als offene Linienfüllung in der Hauptfarbe gestickt.</p>
+    <h2>Fadenführung &amp; Format</h2>
+    <label>Fadenführung
+      <select id="routing">
+        <option value="continuous">Möglichst durchgehend – wenige Fadenschnitte</option>
+        <option value="balanced">Ausgewogen – kürzere Laufwege, mehr Schnitte</option>
+      </select>
+    </label>
+    <p class="hint">Ohne automatischen Fadenabschneider an der Maschine: „durchgehend“ wählen.</p>
     <label>Dateiformat
       <select id="format">
         <option value="pes">PES – Brother, Babylock</option>
@@ -204,7 +210,16 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const $ = s => document.querySelector(s);
-const state = { orient: "landscape", tab: "png", job: null, bounds: null };
+const state = { orient: "landscape", tab: "png", job: null, bounds: null, styles: null, style: null, open: new Set() };
+const STITCH_LABELS = { satin: "Satin", run: "Geradstich", tatami: "Füllung", contour: "Konturfüllung", outline: "Umriss" };
+const FIELDS = {  // welche Detailfelder je Stickart
+  satin: [["width", "Breite (mm)", 0.1], ["density", "Stichabstand (mm)", 0.05]],
+  run: [["repeats", "Wiederholungen"], ["stitch_length", "Stichlänge (mm)", 0.1]],
+  outline: [["repeats", "Wiederholungen"], ["stitch_length", "Stichlänge (mm)", 0.1]],
+  tatami: [["row_spacing", "Reihenabstand (mm)", 0.05], ["angle", "Winkel (°)", 5], ["underlay", "Unterlage"]],
+  contour: [["row_spacing", "Linienabstand (mm)", 0.1], ["stitch_length", "Stichlänge (mm)", 0.1]],
+};
+const esc = v => String(v).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const START = [52.498751, 13.381239];
 
 const map = L.map("map", { zoomSnap: 0.25 }).setView(START, 15);
@@ -236,7 +251,7 @@ function update() {
   $("#widthLabel").textContent = wm >= 1000 ? `${(wm / 1000).toFixed(2).replace(".", ",")} km` : `${wm} m`;
   $("#mPerMm").textContent = `${mpm.toFixed(1).replace(".", ",")} m`;
   const warn = [];
-  if (mpm > 12 && $("#buildings").value !== "none") warn.push("Gebäude werden bei diesem Maßstab sehr kleinteilig – Ausschnitt verkleinern oder Gebäude weglassen.");
+  if (mpm > 12 && state.style?.layers.buildings.enabled) warn.push("Gebäude werden bei diesem Maßstab sehr kleinteilig – Ausschnitt verkleinern oder Gebäude weglassen.");
   if (mpm > 25) warn.push("Sehr großer Ausschnitt: viele Nebenstraßen fallen weg oder verschmelzen.");
   if (mpm < 3) warn.push("Sehr kleiner Ausschnitt: Straßen werden im Verhältnis zu schmal dargestellt.");
   if (state.bounds && !state.bounds.contains(frameBounds(c))) warn.push("Der Rahmen ragt aus dem Datenbereich (gestrichelt) heraus.");
@@ -245,7 +260,7 @@ function update() {
 function fit() { map.fitBounds(frameBounds(map.getCenter()), { padding: [40, 40], animate: false }); }
 
 map.on("move zoom zoomend moveend resize", update);
-for (const el of ["#width", "#hoop", "#cw", "#ch", "#buildings"]) $(el).addEventListener("input", () => {
+for (const el of ["#width", "#hoop", "#cw", "#ch"]) $(el).addEventListener("input", () => {
   $("#customSize").hidden = $("#hoop").value !== "custom"; update();
 });
 $("#width").addEventListener("change", fit);
@@ -257,7 +272,69 @@ $("#orient").addEventListener("click", e => {
   for (const x of $("#orient").children) x.setAttribute("aria-pressed", x === b);
   update(); fit();
 });
-$("#waterOn").addEventListener("change", () => $("#waterColor").disabled = !$("#waterOn").checked);
+
+// ---- Stil-Editor
+function applyPreset(id) {
+  state.style = structuredClone(state.styles.presets[id]);
+  $("#presetDesc").textContent = state.style.description;
+  $("#fabric").value = state.style.fabric.color;
+  $("#routing").value = state.style.routing.mode;
+  renderLayers();
+}
+function renderLayers() {
+  const st = state.style;
+  $("#layers").innerHTML = state.styles.layers.map(name => {
+    const cfg = st.layers[name], type = state.styles.types[name];
+    const options = state.styles.stitches[type].map(k =>
+      `<option value="${k}" ${k === cfg.stitch ? "selected" : ""}>${STITCH_LABELS[k]}</option>`).join("");
+    const body = (FIELDS[cfg.stitch] || []).map(([f, label, step]) => {
+      if (f === "repeats") return `<label>${label}<select data-f="${f}">${[1, 3, 5].map(n =>
+        `<option ${n === cfg.repeats ? "selected" : ""}>${n}</option>`).join("")}</select></label>`;
+      if (f === "underlay") return `<label class="check" style="margin-top:18px"><input type="checkbox" data-f="${f}" ${cfg.underlay ? "checked" : ""}> ${label}</label>`;
+      const [lo, hi] = state.styles.ranges[f];
+      return `<label>${label}<input type="number" data-f="${f}" min="${lo}" max="${hi}" step="${step}" value="${cfg[f]}"></label>`;
+    }).join("");
+    const open = state.open.has(name);
+    return `<div class="layer ${cfg.enabled ? "" : "off"}" data-layer="${name}">
+      <div class="layer-head">
+        <input type="checkbox" data-f="enabled" ${cfg.enabled ? "checked" : ""} aria-label="${esc(cfg.label)} sticken">
+        <span class="name">${esc(cfg.label)}</span>
+        <select data-f="stitch" aria-label="Stickart">${options}</select>
+        <input type="color" data-f="color" value="${cfg.color}" aria-label="Garnfarbe ${esc(cfg.label)}">
+        <button type="button" class="more" aria-expanded="${open}" title="Details">${open ? "−" : "+"}</button>
+      </div>
+      ${open ? `<div class="layer-body">${body}</div>` : ""}
+    </div>`;
+  }).join("");
+  const colors = new Set(state.styles.layers.filter(n => st.layers[n].enabled).map(n => st.layers[n].color.toLowerCase()));
+  $("#threadCount").textContent = `${colors.size} ${colors.size === 1 ? "Garnfarbe" : "Garnfarben"} · Ebenen gleicher Farbe werden ohne Farbwechsel gestickt.`;
+  update();
+}
+$("#layers").addEventListener("change", e => {
+  const row = e.target.closest("[data-layer]"), f = e.target.dataset.f;
+  if (!row || !f) return;
+  const cfg = state.style.layers[row.dataset.layer];
+  const t = e.target;
+  cfg[f] = t.type === "checkbox" ? t.checked : t.type === "number" || f === "repeats" ? +t.value : t.value;
+  renderLayers();
+});
+$("#layers").addEventListener("click", e => {
+  const b = e.target.closest(".more"); if (!b) return;
+  const name = b.closest("[data-layer]").dataset.layer;
+  state.open.has(name) ? state.open.delete(name) : state.open.add(name);
+  renderLayers();
+});
+$("#preset").addEventListener("change", () => applyPreset($("#preset").value));
+$("#resetStyle").addEventListener("click", () => applyPreset($("#preset").value));
+$("#fabric").addEventListener("input", () => state.style.fabric.color = $("#fabric").value);
+$("#routing").addEventListener("change", () => state.style.routing.mode = $("#routing").value);
+
+fetch("/api/styles").then(r => r.json()).then(s => {
+  state.styles = s;
+  $("#preset").innerHTML = Object.entries(s.presets).map(([id, p]) =>
+    `<option value="${id}" ${id === "toner-wasser" ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  applyPreset($("#preset").value);
+});
 
 fetch("/api/info").then(r => r.json()).then(info => {
   const [minx, miny, maxx, maxy] = info.bounds;
@@ -288,15 +365,15 @@ $("#go").addEventListener("click", async () => {
   const c = map.getCenter(), [w, h] = sizeMm();
   const body = {
     lat: c.lat, lon: c.lng, width_m: +$("#width").value, size_w: w, size_h: h,
-    format: $("#format").value, color: $("#color").value, buildings: $("#buildings").value,
-    water_color: $("#waterOn").checked ? $("#waterColor").value : null,
-    include: [...document.querySelectorAll("[data-layer]:checked")].map(x => x.dataset.layer),
+    format: $("#format").value, style: $("#preset").value,
+    overrides: { layers: state.style.layers, fabric: state.style.fabric, routing: state.style.routing },
   };
   $("#formError").hidden = true; $("#go").disabled = true;
   try {
     const r = await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
-    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Ungültige Eingaben.");
+    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Ungültige Eingaben: " +
+      (j.detail || []).map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(", "));
     state.job = j.id; $("#result").hidden = true; $("#steps").hidden = false;
     poll();
   } catch (err) { showError(err.message); }

@@ -74,6 +74,8 @@ RANGES = {
     "row_spacing": (0.2, 5.0), "angle": (-180, 180), "pull_compensation": (0.0, 1.0),
 }
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+FIELD_NAMES = {"width": "Breite", "density": "Stichabstand", "stitch_length": "Stichlänge",
+               "row_spacing": "Reihenabstand", "angle": "Winkel", "pull_compensation": "Zugausgleich"}
 
 
 def layer_type(name):
@@ -111,7 +113,7 @@ def validate(style):
         for k, (lo, hi) in RANGES.items():
             v = cfg.get(k)
             if v is not None and not (isinstance(v, (int, float)) and lo <= v <= hi):
-                errors.append(f"{label}: {k} muss zwischen {lo} und {hi} liegen")
+                errors.append(f"{label}: {FIELD_NAMES[k]} muss zwischen {lo} und {hi} liegen")
     pc = style["fabric"]["pull_compensation"]
     if not (isinstance(pc, (int, float)) and 0 <= pc <= 1):
         errors.append("Zugausgleich muss zwischen 0 und 1 mm liegen")

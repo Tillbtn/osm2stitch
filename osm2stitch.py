@@ -362,6 +362,8 @@ def svg_element(it, ident):
             "inkstitch:expand_mm": 0.2 if it["underlay"] else 0,
             "inkstitch:staggers": 4,
         })
+        if it.get("strategy") is not None:
+            base["inkstitch:contour_strategy"] = it["strategy"]
     elif k == "satin":
         left, right = satin_rails(LineString(it["coords"]), it["width"])
         base.update({
@@ -456,6 +458,20 @@ def classify(f):
         if t.get("building", "no") not in ("no", "roof"):
             return "buildings"
     return None
+
+
+def spiral_ok(poly, spacing):
+    """Ink/Stitch kann eine Konturfüllung nur dann als einzelne Spirale sticken, wenn die
+    Fläche keine Löcher hat und mindestens eine Windung hineinpasst."""
+    inner, d = poly, 0.0
+    while True:
+        if not isinstance(inner, Polygon) or inner.interiors:
+            return False
+        d += spacing / 2
+        inner = poly.buffer(-d)
+        if inner.is_empty:
+            return d > spacing
+
 
 
 def line_width(cfg):
@@ -556,7 +572,8 @@ def build(data, width_m, w_mm, h_mm, style):
             fills += [poly_item(p, "fill", layer=name, color=cfg["color"], opacity=opacity,
                                 method="contour_fill" if contour else "tatami_fill",
                                 angle=cfg["angle"], row_spacing=cfg["row_spacing"],
-                                stitch_length=cfg["stitch_length"], underlay=cfg["underlay"])
+                                stitch_length=cfg["stitch_length"], underlay=cfg["underlay"],
+                                strategy=1 if contour and spiral_ok(p, cfg["row_spacing"]) else None)
                       for p in polys]
     for name in LINE_LAYERS:
         cfg = L[name]
@@ -603,6 +620,16 @@ def build(data, width_m, w_mm, h_mm, style):
     return layers, stats
 
 
+def strip_spirals(layers):
+    """Konturfüllungen wieder auf das Standardverfahren setzen; True, falls es welche gab."""
+    found = False
+    for _, items in layers:
+        for it in items:
+            if it.get("strategy") is not None:
+                it["strategy"], found = None, True
+    return found
+
+
 def inkstitch_cmd(svg, extension, **params):
     return [str(INKSTITCH), f"--extension={extension}"] + [f"--{k}={v}" for k, v in params.items()] + [str(svg)]
 
@@ -612,7 +639,7 @@ def run_inkstitch(svg, extension, out, **params):
         r = subprocess.run(inkstitch_cmd(svg, extension, **params), stdout=f, stderr=subprocess.PIPE)
     if r.returncode or r.stderr.strip():
         print(r.stderr.decode(errors="replace")[-2000:], file=sys.stderr)
-    return r.returncode == 0
+    return r.returncode == 0 and b"Traceback" not in r.stderr
 
 
 def main():
@@ -643,7 +670,11 @@ def main():
 
     if not args.no_inkstitch:
         emb = Path(f"{args.output}.{args.format}")
-        if run_inkstitch(svg, "output", emb, format=args.format):
+        if not run_inkstitch(svg, "output", emb, format=args.format) and strip_spirals(layers):
+            print("Ink/Stitch-Fehler, neuer Versuch ohne Spiralen", file=sys.stderr)
+            write_svg(svg, layers, w_mm, h_mm)
+            run_inkstitch(svg, "output", emb, format=args.format)
+        if emb.stat().st_size:
             print(f"{emb} geschrieben")
         png = Path(args.output + "_vorschau.png")
         if run_inkstitch(svg, "png_realistic", png, dpi=300):

@@ -5,6 +5,7 @@
 """
 import argparse
 import collections
+import json
 import math
 import queue
 import re
@@ -23,13 +24,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from osm2stitch import ALL_LAYERS, STYLE, build, inkstitch_cmd, write_preview_svg, write_svg
+from osm2stitch import build, inkstitch_cmd, strip_spirals, write_preview_svg, write_svg
 from osmindex import Index
+from style import LAYERS, RANGES, ROUTING, STITCHES, layer_type, list_presets, load_style
 
 ROOT = Path(__file__).parent
 JOBS_DIR = ROOT / "web_jobs"
 FORMATS = ("pes", "dst", "jef", "exp", "vp3", "xxx")
-HEX = r"^#[0-9a-fA-F]{6}$"
 
 # grobe Annahmen für die Zeitschätzung einer Haushaltsmaschine
 STITCHES_PER_MIN = 650
@@ -44,16 +45,15 @@ class JobRequest(BaseModel):
     size_w: float = Field(ge=30, le=400)
     size_h: float = Field(ge=30, le=400)
     format: str = "pes"
-    color: str = Field("#000000", pattern=HEX)
-    water_color: str | None = Field(None, pattern=HEX)
-    buildings: str = Field("outline", pattern="^(outline|fill|none)$")
-    include: list[str] = sorted(ALL_LAYERS)
+    style: str = Field("toner-wasser", pattern=r"^[a-z0-9-]+$")
+    overrides: dict = {}
 
 
 class Job:
-    def __init__(self, req):
+    def __init__(self, req, style):
         self.id = uuid.uuid4().hex[:10]
         self.req = req
+        self.style = style
         self.status = "queued"
         self.error = None
         self.geometry = None
@@ -87,6 +87,22 @@ def embroidery_stats(path):
             "minutes": math.ceil(seconds / 60)}
 
 
+def run_inkstitch_parallel(svg, emb, png, fmt):
+    """Stickdatei und Vorschau gleichzeitig berechnen."""
+    procs = []
+    for out, ext, params in ((emb, "output", {"format": fmt}), (png, "png_realistic", {"dpi": 200})):
+        f = open(out, "wb")
+        procs.append((subprocess.Popen(inkstitch_cmd(svg, ext, **params), stdout=f, stderr=subprocess.PIPE), f, out))
+    errors = []
+    for p, f, out in procs:
+        _, err = p.communicate()
+        f.close()
+        if p.returncode != 0 or out.stat().st_size == 0 or b"Traceback" in err:
+            errors.append(err.decode(errors="replace").strip()[-800:])
+    if errors:
+        raise RuntimeError("Ink/Stitch: " + errors[0])
+
+
 def process(job):
     r = job.req
     job.dir.mkdir(parents=True, exist_ok=True)
@@ -95,9 +111,10 @@ def process(job):
     job.status = "geometry"
     t0 = time.time()
     data = index.query(r.lat, r.lon, r.width_m, height_m)
-    layers, stats = build(data, r.width_m, r.size_w, r.size_h, STYLE, r.water_color, r.buildings, set(r.include))
-    write_svg(job.dir / "karte.svg", layers, r.size_w, r.size_h, r.color)
-    write_preview_svg(job.dir / "schnellansicht.svg", layers, r.size_w, r.size_h, r.color)
+    layers, stats = build(data, r.width_m, r.size_w, r.size_h, job.style)
+    write_svg(job.dir / "karte.svg", layers, r.size_w, r.size_h)
+    write_preview_svg(job.dir / "schnellansicht.svg", layers, r.size_w, r.size_h, job.style["fabric"]["color"])
+    (job.dir / "stil.json").write_text(json.dumps(job.style, ensure_ascii=False, indent=2))
     job.geometry = {"objects": stats, "seconds": round(time.time() - t0, 1)}
     job.files.update(svg="karte.svg", preview_svg="schnellansicht.svg")
 
@@ -105,16 +122,14 @@ def process(job):
     t0 = time.time()
     emb = job.dir / f"karte.{r.format}"
     png = job.dir / "stickvorschau.png"
-    procs = []
-    for out, ext, params in ((emb, "output", {"format": r.format}), (png, "png_realistic", {"dpi": 200})):
-        f = open(out, "wb")
-        procs.append((subprocess.Popen(inkstitch_cmd(job.dir / "karte.svg", ext, **params),
-                                       stdout=f, stderr=subprocess.PIPE), f, out))
-    for p, f, out in procs:
-        _, err = p.communicate()
-        f.close()
-        if p.returncode != 0 or out.stat().st_size == 0:
-            raise RuntimeError("Ink/Stitch: " + err.decode(errors="replace").strip()[-800:])
+    try:
+        run_inkstitch_parallel(job.dir / "karte.svg", emb, png, r.format)
+    except RuntimeError:
+        # Ink/Stitch scheitert vereinzelt an Konturfüllungen als Spirale -> ohne Spiralen neu
+        if not strip_spirals(layers):
+            raise
+        write_svg(job.dir / "karte.svg", layers, r.size_w, r.size_h)
+        run_inkstitch_parallel(job.dir / "karte.svg", emb, png, r.format)
     job.files.update(embroidery=emb.name, png=png.name)
     job.result = embroidery_stats(emb) | {"seconds": round(time.time() - t0, 1)}
 
@@ -123,6 +138,7 @@ def process(job):
         f"Mittelpunkt: {r.lat:.6f}, {r.lon:.6f}\n"
         f"Ausschnitt:  {r.width_m:.0f} m x {height_m:.0f} m\n"
         f"Stickgröße:  {r.size_w:.0f} x {r.size_h:.0f} mm  (1 mm = {r.width_m / r.size_w:.1f} m)\n"
+        f"Stil:        {job.style['name']} (Einstellungen in stil.json)\n"
         f"Stiche:      {job.result['stitches']}, Fadenschnitte: {job.result['trims']}, "
         f"geschätzt ca. {job.result['minutes']} min\n"
         f"Garne (in Stickreihenfolge): {', '.join(job.result['threads'])}\n\n"
@@ -132,7 +148,7 @@ def process(job):
     )
     (job.dir / "LIESMICH.txt").write_text(readme)
     with zipfile.ZipFile(job.dir / "stickkarte.zip", "w", zipfile.ZIP_DEFLATED) as z:
-        for name in (emb.name, "karte.svg", png.name, "LIESMICH.txt"):
+        for name in (emb.name, "karte.svg", png.name, "stil.json", "LIESMICH.txt"):
             z.write(job.dir / name, name)
     job.files["zip"] = "stickkarte.zip"
     job.status = "done"
@@ -156,22 +172,32 @@ def home():
 @app.get("/api/info")
 def info():
     return {"bounds": index.bounds, "source": index.meta.get("source"), "timestamp": index.meta.get("timestamp"),
-            "formats": FORMATS, "layers": sorted(ALL_LAYERS),
+            "formats": FORMATS,
             "estimate": {"stitches_per_min": STITCHES_PER_MIN, "seconds_per_trim": SECONDS_PER_TRIM}}
+
+
+@app.get("/api/styles")
+def styles():
+    """Voreinstellungen und Schema für den Stil-Editor."""
+    return {"presets": list_presets(), "layers": list(LAYERS),
+            "types": {name: layer_type(name) for name in LAYERS},
+            "stitches": STITCHES, "ranges": RANGES, "routing": list(ROUTING)}
 
 
 @app.post("/api/jobs")
 def create_job(req: JobRequest):
     if req.format not in FORMATS:
         raise HTTPException(400, f"Unbekanntes Format: {req.format}")
-    if unknown := set(req.include) - ALL_LAYERS:
-        raise HTTPException(400, f"Unbekannte Ebenen: {', '.join(sorted(unknown))}")
+    try:
+        style = load_style(req.style, req.overrides)
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(400, f"Ungültiger Stil: {e}")
     height_m = req.width_m * req.size_h / req.size_w
     dlat = height_m / 2 / 111_320
     dlon = req.width_m / 2 / (111_320 * math.cos(math.radians(req.lat)))
     if not (index.covers(req.lat - dlat, req.lon - dlon) and index.covers(req.lat + dlat, req.lon + dlon)):
         raise HTTPException(400, "Der Ausschnitt liegt (teilweise) außerhalb der geladenen OSM-Daten.")
-    job = Job(req)
+    job = Job(req, style)
     jobs[job.id] = job
     pending.put(job)
     return job.public(position=pending.qsize())
