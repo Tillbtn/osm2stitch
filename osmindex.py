@@ -91,6 +91,8 @@ def build(pbf, db_path):
 
 
 class Index:
+    name = "lokal"
+
     def __init__(self, db_path):
         self.db_path = str(db_path)
         con = self._connect()
@@ -100,6 +102,9 @@ class Index:
 
     def _connect(self):
         return sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, check_same_thread=False)
+
+    def describe(self):
+        return f"lokal ({self.meta.get('source')})"
 
     def query(self, lat, lon, width_m, height_m, margin=1.15):
         """Alle Objekte im Rechteck (Mittelpunkt + Ausdehnung in m), auf den Ausschnitt zugeschnitten.
@@ -116,11 +121,13 @@ class Index:
         geoms = shapely.intersection(shapely.from_wkb([r[2] for r in rows]), clip) if rows else []
         features = [{"kind": k, "tags": json.loads(t), "geom": g}
                     for (k, t, _), g in zip(rows, geoms) if not g.is_empty]
-        return {"center": [lat, lon], "features": features}
+        return {"center": [lat, lon], "features": features,
+                "source": {"name": self.describe(), "timestamp": self.meta.get("timestamp"), "cached": False}}
 
-    def covers(self, lat, lon):
+    def covers(self, bounds):
+        """Liegt das Rechteck (minx, miny, maxx, maxy) vollständig im Datenbereich?"""
         minx, miny, maxx, maxy = self.bounds
-        return minx <= lon <= maxx and miny <= lat <= maxy
+        return minx <= bounds[0] and miny <= bounds[1] and bounds[2] <= maxx and bounds[3] <= maxy
 
 
 def main():

@@ -102,7 +102,7 @@
   <section>
     <h2>Ort</h2>
     <form id="searchForm" class="row">
-      <input type="search" id="search" placeholder="Straße, Platz, Kiez …" aria-label="Ort suchen">
+      <input type="search" id="search" placeholder="Ort, Straße, Platz …" aria-label="Ort suchen">
       <button type="submit" style="flex:0 0 auto;margin-top:4px">Suchen</button>
     </form>
     <div id="searchMsg" class="hint" style="margin-top:6px"></div>
@@ -183,6 +183,7 @@
     <div id="formError" class="error" hidden></div>
     <ul class="steps" id="steps" hidden>
       <li data-s="queued">In der Warteschlange</li>
+      <li data-s="loading">OSM-Daten laden</li>
       <li data-s="geometry">Kartendaten generalisieren</li>
       <li data-s="inkstitch">Stiche berechnen (Ink/Stitch)</li>
       <li data-s="done">Fertig</li>
@@ -198,6 +199,7 @@
     <div class="preview"><div id="previewBox"><div class="empty">Vorschau folgt …</div></div></div>
     <div class="stats" id="stats"></div>
     <div class="threads" id="threads"></div>
+    <p class="hint" id="dataSource"></p>
     <div class="downloads" id="downloads"></div>
   </section>
 
@@ -337,10 +339,12 @@ fetch("/api/styles").then(r => r.json()).then(s => {
 });
 
 fetch("/api/info").then(r => r.json()).then(info => {
-  const [minx, miny, maxx, maxy] = info.bounds;
-  state.bounds = L.latLngBounds([miny, minx], [maxy, maxx]);
-  L.rectangle(state.bounds, { color: "#888", weight: 1.5, dashArray: "6 6", fill: false, interactive: false }).addTo(map);
-  $("#dataInfo").textContent = `Daten: ${info.source}, Stand ${(info.timestamp || "").slice(0, 10)}`;
+  if (info.bounds) {  // regionale Daten: Datenbereich einzeichnen
+    const [minx, miny, maxx, maxy] = info.bounds;
+    state.bounds = L.latLngBounds([miny, minx], [maxy, maxx]);
+    L.rectangle(state.bounds, { color: "#888", weight: 1.5, dashArray: "6 6", fill: false, interactive: false }).addTo(map);
+  }
+  $("#dataInfo").textContent = `Datenquelle: ${info.source}`;
   update();
 });
 update(); fit();
@@ -354,7 +358,7 @@ $("#searchForm").addEventListener("submit", async e => {
   if (state.bounds) { p.set("viewbox", state.bounds.toBBoxString()); p.set("bounded", 1); }
   try {
     const res = await (await fetch("https://nominatim.openstreetmap.org/search?" + p)).json();
-    if (!res.length) { $("#searchMsg").textContent = "Nichts gefunden (nur im Datenbereich)."; return; }
+    if (!res.length) { $("#searchMsg").textContent = state.bounds ? "Nichts gefunden (nur im Datenbereich)." : "Nichts gefunden."; return; }
     map.setView([+res[0].lat, +res[0].lon]); fit();
     $("#searchMsg").textContent = res[0].display_name;
   } catch { $("#searchMsg").textContent = "Suche nicht erreichbar."; }
@@ -368,13 +372,14 @@ $("#go").addEventListener("click", async () => {
     format: $("#format").value, style: $("#preset").value,
     overrides: { layers: state.style.layers, fabric: state.style.fabric, routing: state.style.routing },
   };
-  $("#formError").hidden = true; $("#go").disabled = true;
+  $("#formError").hidden = true; $("#go").disabled = true; $("#result").hidden = true;
+  for (const li of $("#steps").children) li.className = "";
   try {
     const r = await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
     if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Ungültige Eingaben: " +
       (j.detail || []).map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(", "));
-    state.job = j.id; $("#result").hidden = true; $("#steps").hidden = false;
+    state.job = j.id; $("#steps").hidden = false;
     poll();
   } catch (err) { showError(err.message); }
 });
@@ -384,7 +389,7 @@ async function poll() {
   const id = state.job;
   const j = await (await fetch(`/api/jobs/${id}`)).json();
   if (id !== state.job) return;
-  const order = ["queued", "geometry", "inkstitch", "done"], cur = order.indexOf(j.status);
+  const order = ["queued", "loading", "geometry", "inkstitch", "done"], cur = order.indexOf(j.status);
   for (const li of $("#steps").children) {
     const i = order.indexOf(li.dataset.s);
     li.className = j.status === "done" || i < cur ? "done" : i === cur ? "active" : "";
@@ -407,6 +412,9 @@ function showResult(j) {
     [`${de(r.width_mm)} × ${de(r.height_mm)}`, "Maße in mm"], [`${de(g.seconds + r.seconds)} s`, "Rechenzeit"],
   ] : [[g.objects["Schnitte"], "Fadenschnitte (vorläufig)"], [`${de(g.seconds)} s`, "Generalisierung"]];
   $("#stats").innerHTML = tiles.map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
+  const ds = j.data_source;
+  $("#dataSource").innerHTML = ds ? `Daten: ${esc(ds.name)}, Stand ${esc((ds.timestamp || "?").replace("T", " ").slice(0, 16))}`
+    + (ds.cached ? " (aus Zwischenspeicher)" : "") + (ds.note ? `<br><span class="warn" style="display:block;margin-top:6px">${esc(ds.note)}</span>` : "") : "";
   $("#threads").innerHTML = r ? "Garne in Reihenfolge: " + r.threads.map(c => `<span class="swatch" style="background:${c}" title="${c}"></span>`).join("") : "";
   const f = j.files, fmt = f.embroidery ? f.embroidery.split(".").pop().toUpperCase() : "";
   $("#downloads").innerHTML = r ? `

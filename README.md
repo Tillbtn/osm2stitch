@@ -61,15 +61,26 @@ Stichlängen, Füllungen und Konturfüllung. Die Parameter je Feld stehen in
 
 ## Demo-Website (lokal)
 
-1. Einmalig den räumlichen Index aus der PBF bauen (~75 s, ~270 MB für Berlin):
+    uv run app.py                    # http://127.0.0.1:8000
+    uv run app.py --host 0.0.0.0     # im ganzen Netzwerk erreichbar
 
-       uv run osmindex.py /pfad/zu/berlin-latest.osm.pbf data/berlin.sqlite
+### Datenquellen
 
-2. Server starten und http://127.0.0.1:8000 öffnen:
+- **Postpass** (Standard): öffentliche OSM-PostGIS der Geofabrik, weltweit und
+  minutenaktuell. Eine SQL-Abfrage pro Karte (Filter auf die benötigten Tags),
+  Antwort ~0,5 s / ~1 MB für 1 km². Antworten werden mit etwas Rand in
+  `data/cache/postpass/` zwischengespeichert (Standard 24 h, `--cache-hours`),
+  sodass Stiländerungen und kleine Verschiebungen ohne neue Abfrage auskommen.
+  Postpass gibt keine Verfügbarkeitsgarantie.
+- **Lokaler Index** (Ausweichlösung): wenn `data/berlin.sqlite` existiert, wird er
+  bei Postpass-Störungen verwendet, sofern der Ausschnitt darin liegt. Bauen
+  (~75 s, ~270 MB für Berlin):
 
-       uv run app.py --db data/berlin.sqlite
+      uv run osmindex.py /pfad/zu/berlin-latest.osm.pbf data/berlin.sqlite
 
-Ablauf pro Auftrag: Ausschnitt aus dem Index (~0,05 s) → Generalisierung und
+- `--source local` nutzt nur den lokalen Index, `--source postpass` nur Postpass.
+
+Ablauf pro Auftrag: Daten laden (Postpass ~0,5 s, Cache/Index ~0,1 s) → Generalisierung und
 Routing in Python (<1 s) → Ink/Stitch berechnet Stickdatei und Vorschau
 parallel (~5–15 s). Aufträge laufen nacheinander über eine Warteschlange; die
 Ergebnisse liegen in `web_jobs/<id>/` (Stickdatei, SVG, Vorschau, verwendeter
@@ -79,7 +90,8 @@ Aufbau:
 
 | Datei | Aufgabe |
 |---|---|
-| `osmindex.py` | PBF → SQLite/R-Tree; `Index.query()` liefert Ausschnitte (später austauschbar gegen PostGIS) |
+| `sources.py` | Datenquellen: Postpass mit Cache, Ausweichlösung |
+| `osmindex.py` | PBF → SQLite/R-Tree; `Index.query()` liefert Ausschnitte |
 | `style.py`, `styles/` | Stil-Schema, Voreinstellungen, Prüfung |
 | `osm2stitch.py` | Generalisierung, Stickarten, Routing, SVG für Ink/Stitch + Schnellansicht |
 | `testmuster.py` | Probestick-Muster mit Parametervarianten |
