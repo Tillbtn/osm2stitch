@@ -28,7 +28,7 @@ def main():
     ap.add_argument("pbf")
     ap.add_argument("--lat", type=float, required=True)
     ap.add_argument("--lon", type=float, required=True)
-    ap.add_argument("--radius", type=float, default=2500, help="halbe Kantenlänge in m")
+    ap.add_argument("--radius", type=float, default=2500, help="half the side length in m")
     ap.add_argument("-o", "--output", default="extract.json")
     args = ap.parse_args()
 
@@ -68,7 +68,7 @@ def main():
 
     with open(args.output, "w") as f:
         json.dump({"center": [args.lat, args.lon], "radius": args.radius, "features": features}, f)
-    print(f"{len(features)} Objekte in {time.time() - t0:.0f}s -> {args.output}")
+    print(f"{len(features)} objects in {time.time() - t0:.0f}s -> {args.output}")
 
 
 if __name__ == "__main__":

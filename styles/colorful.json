@@ -1,6 +1,6 @@
 {
-  "name": "Bunt",
-  "description": "Straßen dunkel, Wasser blau, Parks grün, Gebäude in hellem Grau. Vier Garne.",
+  "name": "Colorful",
+  "description": "Dark roads, blue water, green parks, light grey buildings. Four threads.",
   "layers": {
     "major": {"color": "#2b2b2b"},
     "medium": {"color": "#2b2b2b"},

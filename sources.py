@@ -4,7 +4,7 @@ All sources return the same format via `query(lat, lon, width_m, height_m)`:
 {"center": [lat, lon], "features": [{"kind": "way"|"area", "tags": {...}, "geom": shapely}],
  "source": {"name": ..., "timestamp": ..., "cached": bool, "note": ...}}
 
-- PostpassSource: worldwide via Geofabrik's public PostGIS API, with a cache
+- PostpassSource: Geofabrik's public PostGIS API, with a cache
 - osmindex.Index: local SQLite index built from a PBF (regional)
 - FallbackSource: Postpass first, the local index on failure (if it covers the section)
 """
@@ -25,7 +25,7 @@ from shapely.geometry import box, shape
 from osm2stitch import GREEN, MAJOR, MEDIUM, MINOR, RAIL, WATER
 
 POSTPASS_URL = "https://postpass.geofabrik.de/api/interpreter"
-USER_AGENT = "osm-stickkarte/0.1 (Stickkarten aus OSM-Daten, Demo)"
+USER_AGENT = "osm2stitch/0.1 (+https://github.com/Tillbtn/osm2stitch)"
 
 
 class SourceError(RuntimeError):
@@ -70,7 +70,7 @@ def clip(features, bounds):
 
 class PostpassSource:
     name = "Postpass"
-    bounds = None  # worldwide
+    bounds = None  # no coverage limit
 
     def __init__(self, cache_dir, url=POSTPASS_URL, ttl_hours=24, timeout=90, fetch_margin=1.4):
         self.url, self.timeout, self.ttl = url, timeout, ttl_hours * 3600
@@ -83,7 +83,7 @@ class PostpassSource:
                 fetched REAL, timestamp TEXT)""")
 
     def describe(self):
-        return "Postpass (Geofabrik, weltweit)"
+        return "Postpass (Geofabrik)"
 
     def covers(self, bounds):
         return True
@@ -121,9 +121,9 @@ class PostpassSource:
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace").strip()
             detail = "" if detail.startswith("<") else f": {detail[:300]}"  # omit HTML error pages
-            raise SourceError(f"Postpass antwortet mit Fehler {e.code}{detail}") from e
+            raise SourceError(f"Postpass returned error {e.code}{detail}") from e
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise SourceError(f"Postpass nicht erreichbar: {getattr(e, 'reason', e)}") from e
+            raise SourceError(f"Postpass unreachable: {getattr(e, 'reason', e)}") from e
 
     def query(self, lat, lon, width_m, height_m, margin=1.15):
         need = bbox_around(lat, lon, width_m, height_m, margin)
@@ -136,7 +136,7 @@ class PostpassSource:
             try:
                 timestamp = json.loads(raw).get("postpass_properties", {}).get("timestamp")
             except json.JSONDecodeError as e:
-                raise SourceError("Postpass lieferte keine gültigen Daten") from e
+                raise SourceError("Postpass returned invalid data") from e
             self._store(fetch, raw, timestamp)
             cached = False
         fc = json.loads(raw)
@@ -156,7 +156,7 @@ class FallbackSource:
         self.name = primary.name
 
     def describe(self):
-        return f"{self.primary.describe()}, Ausweichlösung: {self.fallback.describe()}"
+        return f"{self.primary.describe()}, fallback: {self.fallback.describe()}"
 
     def covers(self, bounds):
         return self.primary.covers(bounds)
@@ -166,7 +166,7 @@ class FallbackSource:
             return self.primary.query(lat, lon, width_m, height_m, margin)
         except SourceError as e:
             if not self.fallback.covers(bbox_around(lat, lon, width_m, height_m)):
-                raise SourceError(f"{e} – und der Ausschnitt liegt außerhalb der lokalen Daten.") from e
+                raise SourceError(f"{e} (and the section is outside the local data)") from e
             data = self.fallback.query(lat, lon, width_m, height_m, margin)
-            data["source"]["note"] = f"{e}; stattdessen lokale Daten verwendet."
+            data["source"]["note"] = f"{e}; used local data instead."
             return data

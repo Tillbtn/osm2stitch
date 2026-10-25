@@ -1,10 +1,9 @@
 """Spatial index (SQLite + R-tree) over the OSM objects relevant for embroidery maps.
 
 Build it once from an .osm.pbf; afterwards `query()` returns any section in
-milliseconds – this replaces the per-map PBF pass of extract.py.
-A PostGIS query could just as well take its place later.
+milliseconds.
 
-    python osmindex.py berlin-latest.osm.pbf data/berlin.sqlite
+    uv run osmindex.py berlin-latest.osm.pbf data/berlin.sqlite
 """
 import argparse
 import json
@@ -69,7 +68,7 @@ def build(pbf, db_path):
         n += 1
         if len(batch) >= 20000:
             flush()
-            print(f"\r{n} Objekte …", end="", flush=True)
+            print(f"\r{n} objects …", end="", flush=True)
     if batch:
         flush()
 
@@ -87,11 +86,11 @@ def build(pbf, db_path):
     con.commit()
     con.close()
     tmp.replace(db_path)
-    print(f"\r{n} Objekte in {time.time() - t0:.0f}s -> {db_path}")
+    print(f"\r{n} objects in {time.time() - t0:.0f}s -> {db_path}")
 
 
 class Index:
-    name = "lokal"
+    name = "local"
 
     def __init__(self, db_path):
         self.db_path = str(db_path)
@@ -104,7 +103,7 @@ class Index:
         return sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, check_same_thread=False)
 
     def describe(self):
-        return f"lokal ({self.meta.get('source')})"
+        return f"local ({self.meta.get('source')})"
 
     def query(self, lat, lon, width_m, height_m, margin=1.15):
         """All objects in the rectangle (center + extent in m), clipped to the section.

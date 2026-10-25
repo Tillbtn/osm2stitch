@@ -1,6 +1,6 @@
 {
-  "name": "Toner einfarbig",
-  "description": "Ein einziges Garn. Wasser als offene Linienfüllung, damit es sich von den Straßen abhebt.",
+  "name": "Toner",
+  "description": "One thread. Water as an open fill so it stands out from the roads.",
   "layers": {
     "water": {"color": "#1a1a1a", "row_spacing": 0.6, "underlay": false}
   }

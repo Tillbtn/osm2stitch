@@ -1,4 +1,4 @@
-"""Embroidery styles: how, in which color and whether each object type is stitched at all.
+"""Embroidery styles: whether, how and in which color each object type is stitched.
 
 A style is a nested dict (or a JSON file under styles/) that only needs to contain
 the deviations from DEFAULT. `load_style(name, overrides)` merges default, preset
@@ -17,35 +17,35 @@ AREA_LAYERS = ("water", "green", "buildings")
 LAYERS = LINE_LAYERS + AREA_LAYERS + ("frame",)
 
 STITCHES = {
-    "line": ("satin", "run"),
+    "line": ("satin", "run", "track"),
     "area": ("tatami", "contour", "outline"),
     "frame": ("run",),
 }
 
 DEFAULT = {
-    "name": "Standard",
+    "name": "Default",
     "description": "",
     "fabric": {"color": "#f5f2ea", "pull_compensation": 0.15},
     "routing": {"mode": "continuous"},
     "layers": {
-        "major": {"label": "Hauptstraßen", "enabled": True, "color": "#1a1a1a",
-                  "stitch": "satin", "width": 1.3, "density": 0.4, "repeats": 3, "stitch_length": 2.0},
-        "medium": {"label": "Tertiärstraßen", "enabled": True, "color": "#1a1a1a",
-                   "stitch": "satin", "width": 0.9, "density": 0.4, "repeats": 3, "stitch_length": 2.0},
-        "minor": {"label": "Nebenstraßen", "enabled": True, "color": "#1a1a1a",
-                  "stitch": "run", "width": 0.8, "density": 0.4, "repeats": 3, "stitch_length": 2.0},
-        "rail": {"label": "Bahn", "enabled": True, "color": "#1a1a1a",
-                 "stitch": "run", "width": 0.8, "density": 0.4, "repeats": 3, "stitch_length": 2.0},
-        "water": {"label": "Gewässer", "enabled": True, "color": "#2f6fb0",
+        "major": {"label": "Major roads", "enabled": True, "color": "#1a1a1a",
+                  "stitch": "satin", "width": 1.3, "density": 0.4, "tie_spacing": 1.6, "repeats": 3, "stitch_length": 2.0},
+        "medium": {"label": "Tertiary roads", "enabled": True, "color": "#1a1a1a",
+                   "stitch": "satin", "width": 0.9, "density": 0.4, "tie_spacing": 1.6, "repeats": 3, "stitch_length": 2.0},
+        "minor": {"label": "Minor roads", "enabled": True, "color": "#1a1a1a",
+                  "stitch": "run", "width": 0.8, "density": 0.4, "tie_spacing": 1.6, "repeats": 3, "stitch_length": 2.0},
+        "rail": {"label": "Railways", "enabled": True, "color": "#1a1a1a",
+                 "stitch": "track", "width": 1.2, "density": 0.4, "tie_spacing": 1.6, "repeats": 1, "stitch_length": 2.0},
+        "water": {"label": "Water", "enabled": True, "color": "#2f6fb0",
                   "stitch": "tatami", "row_spacing": 0.25, "angle": 0, "underlay": True,
                   "repeats": 3, "stitch_length": 3.0},
-        "green": {"label": "Parks & Wald", "enabled": True, "color": "#1a1a1a",
+        "green": {"label": "Parks & forest", "enabled": True, "color": "#1a1a1a",
                   "stitch": "contour", "row_spacing": 1.8, "angle": 0, "underlay": False,
                   "repeats": 1, "stitch_length": 2.5},
-        "buildings": {"label": "Gebäude", "enabled": True, "color": "#1a1a1a",
+        "buildings": {"label": "Buildings", "enabled": True, "color": "#1a1a1a",
                       "stitch": "outline", "row_spacing": 0.8, "angle": 135, "underlay": False,
                       "repeats": 1, "stitch_length": 1.5},
-        "frame": {"label": "Rahmenlinie", "enabled": True, "color": "#1a1a1a",
+        "frame": {"label": "Frame", "enabled": True, "color": "#1a1a1a",
                   "stitch": "run", "repeats": 3, "stitch_length": 2.5},
     },
     "generalization": {
@@ -70,11 +70,12 @@ ROUTING = {
 
 RANGES = {
     "width": (0.4, 4.0), "density": (0.25, 1.0), "stitch_length": (1.0, 6.0),
-    "row_spacing": (0.2, 5.0), "angle": (-180, 180), "pull_compensation": (0.0, 1.0),
+    "tie_spacing": (0.8, 5.0), "row_spacing": (0.2, 5.0), "angle": (-180, 180), "pull_compensation": (0.0, 1.0),
 }
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
-FIELD_NAMES = {"width": "Breite", "density": "Stichabstand", "stitch_length": "Stichlänge",
-               "row_spacing": "Reihenabstand", "angle": "Winkel", "pull_compensation": "Zugausgleich"}
+FIELD_NAMES = {"width": "width", "density": "stitch spacing", "stitch_length": "stitch length",
+               "tie_spacing": "sleeper spacing", "row_spacing": "row spacing", "angle": "angle",
+               "pull_compensation": "pull compensation"}
 
 
 def layer_type(name):
@@ -95,27 +96,27 @@ def validate(style):
     errors = []
     unknown = set(style["layers"]) - set(LAYERS)
     if unknown:
-        errors.append(f"Unbekannte Ebenen: {', '.join(sorted(unknown))}")
+        errors.append(f"Unknown layers: {', '.join(sorted(unknown))}")
     if style["routing"]["mode"] not in ROUTING:
-        errors.append(f"Unbekannter Routing-Modus: {style['routing']['mode']}")
+        errors.append(f"Unknown routing mode: {style['routing']['mode']}")
     if not HEX.match(str(style["fabric"]["color"])):
-        errors.append("Stofffarbe muss #rrggbb sein")
+        errors.append("Fabric color must be #rrggbb")
     for name in LAYERS:
         cfg = style["layers"][name]
         label = cfg.get("label", name)
         if cfg["stitch"] not in STITCHES[layer_type(name)]:
-            errors.append(f"{label}: Stickart '{cfg['stitch']}' nicht möglich")
+            errors.append(f"{label}: stitch type '{cfg['stitch']}' not allowed")
         if not HEX.match(str(cfg["color"])):
-            errors.append(f"{label}: Farbe muss #rrggbb sein")
+            errors.append(f"{label}: color must be #rrggbb")
         if cfg.get("repeats", 1) not in (1, 3, 5):
-            errors.append(f"{label}: Wiederholungen müssen 1, 3 oder 5 sein")
+            errors.append(f"{label}: repeats must be 1, 3 or 5")
         for k, (lo, hi) in RANGES.items():
             v = cfg.get(k)
             if v is not None and not (isinstance(v, (int, float)) and lo <= v <= hi):
-                errors.append(f"{label}: {FIELD_NAMES[k]} muss zwischen {lo} und {hi} liegen")
+                errors.append(f"{label}: {FIELD_NAMES[k]} must be between {lo} and {hi}")
     pc = style["fabric"]["pull_compensation"]
     if not (isinstance(pc, (int, float)) and 0 <= pc <= 1):
-        errors.append("Zugausgleich muss zwischen 0 und 1 mm liegen")
+        errors.append("Pull compensation must be between 0 and 1 mm")
     if errors:
         raise ValueError("; ".join(errors))
     return style
@@ -126,12 +127,12 @@ def list_presets():
     return {p.stem: load_style(p.stem) for p in sorted(STYLES_DIR.glob("*.json"))}
 
 
-def load_style(name_or_path="toner-wasser", overrides=None):
+def load_style(name_or_path="toner-water", overrides=None):
     path = Path(name_or_path)
     if not path.suffix:
         path = STYLES_DIR / f"{name_or_path}.json"
     if not path.exists():
-        raise ValueError(f"Unbekannter Stil: {name_or_path}")
+        raise ValueError(f"Unknown style: {name_or_path}")
     style = deep_merge(DEFAULT, json.loads(path.read_text()))
     return validate(deep_merge(style, overrides))
 

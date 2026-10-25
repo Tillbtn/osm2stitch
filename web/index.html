@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OSM-Stickkarte</title>
+<title>osm2stitch</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {
@@ -96,80 +96,80 @@
 </head>
 <body>
 <aside>
-  <h1>OSM-Stickkarte</h1>
-  <p class="sub">Karte verschieben, bis der Ausschnitt im Rahmen liegt – dann Stickdatei erzeugen.</p>
+  <h1>osm2stitch</h1>
+  <p class="sub">Move the map until the section fits the frame, then create the embroidery file.</p>
 
   <section>
-    <h2>Ort</h2>
+    <h2>Location</h2>
     <form id="searchForm" class="row">
-      <input type="search" id="search" placeholder="Ort, Straße, Platz …" aria-label="Ort suchen">
-      <button type="submit" style="flex:0 0 auto;margin-top:4px">Suchen</button>
+      <input type="search" id="search" placeholder="City, street, square …" aria-label="Search location">
+      <button type="submit" style="flex:0 0 auto;margin-top:4px">Search</button>
     </form>
     <div id="searchMsg" class="hint" style="margin-top:6px"></div>
   </section>
 
   <section>
-    <h2>Stickrahmen</h2>
-    <label>Größe
+    <h2>Hoop</h2>
+    <label>Size
       <select id="hoop">
         <option value="100x100">100 × 100 mm (4″ × 4″)</option>
         <option value="130x180">130 × 180 mm (5″ × 7″)</option>
         <option value="160x260">160 × 260 mm (6″ × 10″)</option>
         <option value="200x200">200 × 200 mm (8″ × 8″)</option>
         <option value="200x300">200 × 300 mm (8″ × 12″)</option>
-        <option value="custom">eigene Größe …</option>
+        <option value="custom">custom size …</option>
       </select>
     </label>
     <div class="row" id="customSize" hidden>
-      <label>Breite (mm)<input type="number" id="cw" min="30" max="400" value="120"></label>
-      <label>Höhe (mm)<input type="number" id="ch" min="30" max="400" value="120"></label>
+      <label>Width (mm)<input type="number" id="cw" min="30" max="400" value="120"></label>
+      <label>Height (mm)<input type="number" id="ch" min="30" max="400" value="120"></label>
     </div>
-    <label>Ausrichtung
+    <label>Orientation
       <div class="seg" id="orient">
-        <button type="button" data-v="landscape" aria-pressed="true">Quer</button>
-        <button type="button" data-v="portrait" aria-pressed="false">Hoch</button>
+        <button type="button" data-v="landscape" aria-pressed="true">Landscape</button>
+        <button type="button" data-v="portrait" aria-pressed="false">Portrait</button>
       </div>
     </label>
-    <p class="hint">Stickfläche: <span id="sizeLabel" class="scaleinfo"></span>. Ein paar mm Rand zum Rahmen lassen.</p>
+    <p class="hint">Embroidery area: <span id="sizeLabel" class="scaleinfo"></span>. Leave a few mm of margin to the hoop.</p>
   </section>
 
   <section>
-    <h2>Maßstab</h2>
-    <label>Ausschnittbreite: <span id="widthLabel" class="scaleinfo"></span>
+    <h2>Scale</h2>
+    <label>Section width: <span id="widthLabel" class="scaleinfo"></span>
       <input type="range" id="width" min="300" max="3000" step="50" value="800">
     </label>
-    <p class="hint">1 mm Stoff ≙ <span id="mPerMm" class="scaleinfo"></span>
-      <button type="button" id="fit" style="padding:2px 8px;font-size:12px;margin-left:6px">Rahmen einpassen</button></p>
+    <p class="hint">1 mm of fabric ≙ <span id="mPerMm" class="scaleinfo"></span>
+      <button type="button" id="fit" style="padding:2px 8px;font-size:12px;margin-left:6px">Fit frame</button></p>
     <div id="scaleWarn" class="warn" hidden></div>
   </section>
 
   <section>
-    <h2>Stil</h2>
-    <label>Voreinstellung
+    <h2>Style</h2>
+    <label>Preset
       <select id="preset"></select>
     </label>
     <p class="hint" id="presetDesc"></p>
     <div class="layers" id="layers"></div>
     <div class="row" style="margin-top:8px">
-      <label class="check" style="flex:0 0 auto"><input type="color" id="fabric"> Stofffarbe (Vorschau)</label>
-      <button type="button" id="resetStyle" style="flex:0 0 auto;font-size:13px">Zurücksetzen</button>
+      <label class="check" style="flex:0 0 auto"><input type="color" id="fabric"> Fabric color (preview)</label>
+      <button type="button" id="resetStyle" style="flex:0 0 auto;font-size:13px">Reset</button>
     </div>
     <p class="hint" id="threadCount"></p>
   </section>
 
   <section>
-    <h2>Fadenführung &amp; Format</h2>
-    <label>Fadenführung
+    <h2>Routing &amp; format</h2>
+    <label>Routing
       <select id="routing">
-        <option value="continuous">Möglichst durchgehend – wenige Fadenschnitte</option>
-        <option value="balanced">Ausgewogen – kürzere Laufwege, mehr Schnitte</option>
+        <option value="continuous">Continuous – few thread trims</option>
+        <option value="balanced">Balanced – shorter travel, more trims</option>
       </select>
     </label>
-    <p class="hint">Ohne automatischen Fadenabschneider an der Maschine: „durchgehend“ wählen.</p>
-    <label>Dateiformat
+    <p class="hint">Choose “continuous” if your machine has no automatic thread cutter.</p>
+    <label>File format
       <select id="format">
         <option value="pes">PES – Brother, Babylock</option>
-        <option value="dst">DST – Tajima, viele Profimaschinen</option>
+        <option value="dst">DST – Tajima, many commercial machines</option>
         <option value="jef">JEF – Janome</option>
         <option value="exp">EXP – Melco, Bernina</option>
         <option value="vp3">VP3 – Pfaff, Husqvarna Viking</option>
@@ -179,32 +179,32 @@
   </section>
 
   <section>
-    <button class="primary" id="go">Stickdatei erzeugen</button>
+    <button class="primary" id="go">Create embroidery file</button>
     <div id="formError" class="error" hidden></div>
     <ul class="steps" id="steps" hidden>
-      <li data-s="queued">In der Warteschlange</li>
-      <li data-s="loading">OSM-Daten laden</li>
-      <li data-s="geometry">Kartendaten generalisieren</li>
-      <li data-s="inkstitch">Stiche berechnen (Ink/Stitch)</li>
-      <li data-s="done">Fertig</li>
+      <li data-s="queued">Queued</li>
+      <li data-s="loading">Loading OSM data</li>
+      <li data-s="geometry">Generalizing map data</li>
+      <li data-s="inkstitch">Computing stitches (Ink/Stitch)</li>
+      <li data-s="done">Done</li>
     </ul>
   </section>
 
   <section id="result" hidden>
-    <h2>Ergebnis</h2>
+    <h2>Result</h2>
     <div class="tabs">
-      <button type="button" data-tab="png" aria-pressed="true">Stickvorschau</button>
-      <button type="button" data-tab="svg" aria-pressed="false">Schnellansicht</button>
+      <button type="button" data-tab="png" aria-pressed="true">Stitch preview</button>
+      <button type="button" data-tab="svg" aria-pressed="false">Quick view</button>
     </div>
-    <div class="preview"><div id="previewBox"><div class="empty">Vorschau folgt …</div></div></div>
+    <div class="preview"><div id="previewBox"><div class="empty">Preview coming …</div></div></div>
     <div class="stats" id="stats"></div>
     <div class="threads" id="threads"></div>
     <p class="hint" id="dataSource"></p>
     <div class="downloads" id="downloads"></div>
   </section>
 
-  <p class="foot">Kartendaten © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-Mitwirkende</a>
-    · Stiche: <a href="https://inkstitch.org" target="_blank" rel="noopener">Ink/Stitch</a><br>
+  <p class="foot">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+    · Stitches: <a href="https://inkstitch.org" target="_blank" rel="noopener">Ink/Stitch</a><br>
     <span id="dataInfo"></span></p>
 </aside>
 <div id="map"></div>
@@ -213,13 +213,15 @@
 <script>
 const $ = s => document.querySelector(s);
 const state = { orient: "landscape", tab: "png", job: null, bounds: null, styles: null, style: null, open: new Set() };
-const STITCH_LABELS = { satin: "Satin", run: "Geradstich", tatami: "Füllung", contour: "Konturfüllung", outline: "Umriss" };
+const STITCH_LABELS = { satin: "Satin", run: "Running stitch", track: "Track", tatami: "Fill", contour: "Contour fill", outline: "Outline" };
 const FIELDS = {  // which detail fields per stitch type
-  satin: [["width", "Breite (mm)", 0.1], ["density", "Stichabstand (mm)", 0.05]],
-  run: [["repeats", "Wiederholungen"], ["stitch_length", "Stichlänge (mm)", 0.1]],
-  outline: [["repeats", "Wiederholungen"], ["stitch_length", "Stichlänge (mm)", 0.1]],
-  tatami: [["row_spacing", "Reihenabstand (mm)", 0.05], ["angle", "Winkel (°)", 5], ["underlay", "Unterlage"]],
-  contour: [["row_spacing", "Linienabstand (mm)", 0.1], ["stitch_length", "Stichlänge (mm)", 0.1]],
+  satin: [["width", "Width (mm)", 0.1], ["density", "Spacing (mm)", 0.05]],
+  run: [["repeats", "Repeats"], ["stitch_length", "Stitch length (mm)", 0.1]],
+  track: [["width", "Gauge (mm)", 0.1], ["tie_spacing", "Sleeper spacing (mm)", 0.1],
+          ["repeats", "Repeats"], ["stitch_length", "Stitch length (mm)", 0.1]],
+  outline: [["repeats", "Repeats"], ["stitch_length", "Stitch length (mm)", 0.1]],
+  tatami: [["row_spacing", "Row spacing (mm)", 0.05], ["angle", "Angle (°)", 5], ["underlay", "Underlay"]],
+  contour: [["row_spacing", "Line spacing (mm)", 0.1], ["stitch_length", "Stitch length (mm)", 0.1]],
 };
 const esc = v => String(v).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const START = [52.498751, 13.381239];
@@ -250,13 +252,13 @@ function update() {
   const fb = frameBounds(c), nw = map.latLngToContainerPoint(fb.getNorthWest()), se = map.latLngToContainerPoint(fb.getSouthEast());
   Object.assign(frameBox.style, { left: `${nw.x}px`, top: `${nw.y}px`, width: `${se.x - nw.x}px`, height: `${se.y - nw.y}px` });
   $("#sizeLabel").textContent = `${w} × ${h} mm`;
-  $("#widthLabel").textContent = wm >= 1000 ? `${(wm / 1000).toFixed(2).replace(".", ",")} km` : `${wm} m`;
-  $("#mPerMm").textContent = `${mpm.toFixed(1).replace(".", ",")} m`;
+  $("#widthLabel").textContent = wm >= 1000 ? `${(wm / 1000).toFixed(2)} km` : `${wm} m`;
+  $("#mPerMm").textContent = `${mpm.toFixed(1)} m`;
   const warn = [];
-  if (mpm > 12 && state.style?.layers.buildings.enabled) warn.push("Gebäude werden bei diesem Maßstab sehr kleinteilig – Ausschnitt verkleinern oder Gebäude weglassen.");
-  if (mpm > 25) warn.push("Sehr großer Ausschnitt: viele Nebenstraßen fallen weg oder verschmelzen.");
-  if (mpm < 3) warn.push("Sehr kleiner Ausschnitt: Straßen werden im Verhältnis zu schmal dargestellt.");
-  if (state.bounds && !state.bounds.contains(frameBounds(c))) warn.push("Der Rahmen ragt aus dem Datenbereich (gestrichelt) heraus.");
+  if (mpm > 12 && state.style?.layers.buildings.enabled) warn.push("Buildings get very fine at this scale – reduce the section or disable buildings.");
+  if (mpm > 25) warn.push("Very large section: many minor roads are dropped or merged.");
+  if (mpm < 3) warn.push("Very small section: roads are drawn too narrow in proportion.");
+  if (state.bounds && !state.bounds.contains(frameBounds(c))) warn.push("The frame extends beyond the data area (dashed).");
   $("#scaleWarn").hidden = !warn.length; $("#scaleWarn").innerHTML = warn.join("<br>");
 }
 function fit() { map.fitBounds(frameBounds(map.getCenter()), { padding: [40, 40], animate: false }); }
@@ -299,17 +301,17 @@ function renderLayers() {
     const open = state.open.has(name);
     return `<div class="layer ${cfg.enabled ? "" : "off"}" data-layer="${name}">
       <div class="layer-head">
-        <input type="checkbox" data-f="enabled" ${cfg.enabled ? "checked" : ""} aria-label="${esc(cfg.label)} sticken">
+        <input type="checkbox" data-f="enabled" ${cfg.enabled ? "checked" : ""} aria-label="Stitch ${esc(cfg.label)}">
         <span class="name">${esc(cfg.label)}</span>
-        <select data-f="stitch" aria-label="Stickart">${options}</select>
-        <input type="color" data-f="color" value="${cfg.color}" aria-label="Garnfarbe ${esc(cfg.label)}">
+        <select data-f="stitch" aria-label="Stitch type">${options}</select>
+        <input type="color" data-f="color" value="${cfg.color}" aria-label="Thread color ${esc(cfg.label)}">
         <button type="button" class="more" aria-expanded="${open}" title="Details">${open ? "−" : "+"}</button>
       </div>
       ${open ? `<div class="layer-body">${body}</div>` : ""}
     </div>`;
   }).join("");
   const colors = new Set(state.styles.layers.filter(n => st.layers[n].enabled).map(n => st.layers[n].color.toLowerCase()));
-  $("#threadCount").textContent = `${colors.size} ${colors.size === 1 ? "Garnfarbe" : "Garnfarben"} · Ebenen gleicher Farbe werden ohne Farbwechsel gestickt.`;
+  $("#threadCount").textContent = `${colors.size} thread ${colors.size === 1 ? "color" : "colors"} · layers of the same color are stitched without a color change.`;
   update();
 }
 $("#layers").addEventListener("change", e => {
@@ -334,7 +336,7 @@ $("#routing").addEventListener("change", () => state.style.routing.mode = $("#ro
 fetch("api/styles").then(r => r.json()).then(s => {
   state.styles = s;
   $("#preset").innerHTML = Object.entries(s.presets).map(([id, p]) =>
-    `<option value="${id}" ${id === "toner-wasser" ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+    `<option value="${id}" ${id === "toner-water" ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   applyPreset($("#preset").value);
 });
 
@@ -344,7 +346,7 @@ fetch("api/info").then(r => r.json()).then(info => {
     state.bounds = L.latLngBounds([miny, minx], [maxy, maxx]);
     L.rectangle(state.bounds, { color: "#888", weight: 1.5, dashArray: "6 6", fill: false, interactive: false }).addTo(map);
   }
-  $("#dataInfo").textContent = `Datenquelle: ${info.source}`;
+  $("#dataInfo").textContent = `Data source: ${info.source}`;
   update();
 });
 update(); fit();
@@ -353,15 +355,15 @@ update(); fit();
 $("#searchForm").addEventListener("submit", async e => {
   e.preventDefault();
   const q = $("#search").value.trim(); if (!q) return;
-  $("#searchMsg").textContent = "Suche …";
+  $("#searchMsg").textContent = "Searching …";
   const p = new URLSearchParams({ q, format: "jsonv2", limit: 1 });
   if (state.bounds) { p.set("viewbox", state.bounds.toBBoxString()); p.set("bounded", 1); }
   try {
     const res = await (await fetch("https://nominatim.openstreetmap.org/search?" + p)).json();
-    if (!res.length) { $("#searchMsg").textContent = state.bounds ? "Nichts gefunden (nur im Datenbereich)." : "Nichts gefunden."; return; }
+    if (!res.length) { $("#searchMsg").textContent = state.bounds ? "Nothing found (within the data area)." : "Nothing found."; return; }
     map.setView([+res[0].lat, +res[0].lon]); fit();
     $("#searchMsg").textContent = res[0].display_name;
-  } catch { $("#searchMsg").textContent = "Suche nicht erreichbar."; }
+  } catch { $("#searchMsg").textContent = "Search unavailable."; }
 });
 
 // Start and track the job
@@ -377,7 +379,7 @@ $("#go").addEventListener("click", async () => {
   try {
     const r = await fetch("api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
-    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Ungültige Eingaben: " +
+    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Invalid input: " +
       (j.detail || []).map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(", "));
     state.job = j.id; $("#steps").hidden = false;
     poll();
@@ -394,9 +396,9 @@ async function poll() {
     const i = order.indexOf(li.dataset.s);
     li.className = j.status === "done" || i < cur ? "done" : i === cur ? "active" : "";
   }
-  if (j.status === "queued" && j.queue_position > 1) $("#steps").children[0].textContent = `In der Warteschlange (Platz ${j.queue_position})`;
+  if (j.status === "queued" && j.queue_position > 1) $("#steps").children[0].textContent = `Queued (position ${j.queue_position})`;
   if (j.files.preview_svg) showResult(j);
-  if (j.status === "error") { showError(j.error || "Unbekannter Fehler"); return; }
+  if (j.status === "error") { showError(j.error || "Unknown error"); return; }
   if (j.status === "done") { $("#go").disabled = false; return; }
   setTimeout(poll, 800);
 }
@@ -405,27 +407,27 @@ function showResult(j) {
   $("#result").hidden = false;
   state.files = j.files;
   renderPreview();
-  const g = j.geometry, r = j.result, de = (v, d = 1) => v.toLocaleString("de-DE", { maximumFractionDigits: d });
+  const g = j.geometry, r = j.result, num = (v, d = 1) => v.toLocaleString("en-US", { maximumFractionDigits: d });
   const tiles = r ? [
-    [r.stitches.toLocaleString("de-DE"), "Stiche"], [`~${r.minutes} min`, "Stickzeit (geschätzt)"],
-    [r.trims, "Fadenschnitte"], [r.colors, r.colors === 1 ? "Farbe" : "Farben"],
-    [`${de(r.width_mm)} × ${de(r.height_mm)}`, "Maße in mm"], [`${de(g.seconds + r.seconds)} s`, "Rechenzeit"],
-  ] : [[g.objects["Schnitte"], "Fadenschnitte (vorläufig)"], [`${de(g.seconds)} s`, "Generalisierung"]];
+    [num(r.stitches), "Stitches"], [`~${r.minutes} min`, "Stitching time (est.)"],
+    [r.trims, "Thread trims"], [r.colors, r.colors === 1 ? "Color" : "Colors"],
+    [`${num(r.width_mm)} × ${num(r.height_mm)}`, "Size in mm"], [`${num(g.seconds + r.seconds)} s`, "Processing time"],
+  ] : [[g.objects["Trims"], "Thread trims (preliminary)"], [`${num(g.seconds)} s`, "Generalization"]];
   $("#stats").innerHTML = tiles.map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
   const ds = j.data_source;
-  $("#dataSource").innerHTML = ds ? `Daten: ${esc(ds.name)}, Stand ${esc((ds.timestamp || "?").replace("T", " ").slice(0, 16))}`
-    + (ds.cached ? " (aus Zwischenspeicher)" : "") + (ds.note ? `<br><span class="warn" style="display:block;margin-top:6px">${esc(ds.note)}</span>` : "") : "";
-  $("#threads").innerHTML = r ? "Garne in Reihenfolge: " + r.threads.map(c => `<span class="swatch" style="background:${c}" title="${c}"></span>`).join("") : "";
+  $("#dataSource").innerHTML = ds ? `Data: ${esc(ds.name)}, as of ${esc((ds.timestamp || "?").replace("T", " ").slice(0, 16))}`
+    + (ds.cached ? " (cached)" : "") + (ds.note ? `<br><span class="warn" style="display:block;margin-top:6px">${esc(ds.note)}</span>` : "") : "";
+  $("#threads").innerHTML = r ? "Threads in order: " + r.threads.map(c => `<span class="swatch" style="background:${c}" title="${c}"></span>`).join("") : "";
   const f = j.files, fmt = f.embroidery ? f.embroidery.split(".").pop().toUpperCase() : "";
   $("#downloads").innerHTML = r ? `
-    <a class="primary" href="${f.embroidery}" download>Stickdatei (${fmt}) herunterladen</a>
-    <a href="${f.zip}" download>Alles als ZIP (inkl. SVG für Inkscape)</a>` : "";
+    <a class="primary" href="${f.embroidery}" download>Download embroidery file (${fmt})</a>
+    <a href="${f.zip}" download>Everything as ZIP (incl. SVG for Inkscape)</a>` : "";
 }
 function renderPreview() {
   const f = state.files || {};
   const src = state.tab === "png" ? f.png : f.preview_svg;
-  $("#previewBox").innerHTML = src ? `<img src="${src}" alt="Vorschau der Stickkarte">`
-    : `<div class="empty">Stickvorschau wird berechnet … solange gibt es die Schnellansicht.</div>`;
+  $("#previewBox").innerHTML = src ? `<img src="${src}" alt="Embroidery preview">`
+    : `<div class="empty">Computing stitch preview … see the quick view in the meantime.</div>`;
 }
 document.querySelector(".tabs").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;

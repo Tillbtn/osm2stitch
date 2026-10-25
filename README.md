@@ -1,99 +1,106 @@
-# OSM → Stickdatei (Prototyp)
+# osm2stitch
 
-Erzeugt aus OpenStreetMap-Daten eine Ink/Stitch-fertige SVG und daraus direkt
-eine Stickdatei (PES, DST, …) samt realistischer Vorschau – ohne Inkscape-GUI.
+Turns OpenStreetMap data into embroidery files. The map is generalized and
+converted into an SVG for [Ink/Stitch](https://inkstitch.org), which then
+produces the embroidery file (PES, DST, JEF, …) and a realistic preview without
+the Inkscape GUI.
 
-## Einrichtung
+## Setup
 
     uv sync
 
-Ink/Stitch muss unter `~/.config/inkscape/extensions/inkstitch` installiert sein
-(wird headless über `bin/inkstitch` aufgerufen).
+Ink/Stitch must be installed in `~/.config/inkscape/extensions/inkstitch`; it is
+called headless via `bin/inkstitch`.
 
-## Benutzung
+## Web app
 
-1. Ausschnitt aus der PBF ziehen (einmalig, ~20 s für Berlin):
+    uv run app.py                    # http://127.0.0.1:8000
+    uv run app.py --host 0.0.0.0     # reachable on the local network
+
+Pick a section on the map, choose hoop size, scale and style, and download the
+embroidery file or a ZIP with the SVG, preview, style settings and attribution.
+Jobs are processed one after another through a queue; results are stored in
+`web_jobs/<id>/`.
+
+### Data sources
+
+- **Postpass** (default): Geofabrik's public OSM PostGIS API. One SQL query per
+  map, filtered to the tags that are used. Responses are cached with some margin
+  in `data/cache/postpass/` (24 h by default, `--cache-hours`), so style changes
+  and small shifts need no new query.
+- **Local index** (fallback): if `data/berlin.sqlite` exists, it is used when
+  Postpass fails and the section lies within it. Build it from a PBF:
+
+      uv run osmindex.py berlin-latest.osm.pbf data/berlin.sqlite
+
+`--source local` uses only the local index, `--source postpass` only Postpass.
+
+## Command line
+
+1. Extract the relevant objects from a PBF once:
 
        uv run extract.py berlin-latest.osm.pbf --lat 52.498751 --lon 13.381239 -o kreuzberg.json
 
-2. Karte erzeugen (schnell, beliebig oft mit anderen Parametern):
+2. Generate maps from it:
 
        uv run osm2stitch.py kreuzberg.json -o out/kreuzberg --width-m 800
-       uv run osm2stitch.py kreuzberg.json -o out/bunt --width-m 800 --style bunt
+       uv run osm2stitch.py kreuzberg.json -o out/colorful --width-m 800 --style colorful
        uv run osm2stitch.py kreuzberg.json -o out/test --set layers.major.width=1.6 --set routing.mode=balanced
 
-   Optionen: `--width-m` (Ausschnittbreite in Metern), `--size` (Stickgröße in mm,
-   Standard `100x100`), `--style` (Voreinstellung aus `styles/` oder Pfad zu einer
-   JSON-Datei), `--set PFAD=WERT` (einzelne Stilwerte ändern), `--format` (pes,
-   dst, jef, …), `--no-inkstitch` (nur SVG).
+   Options: `--width-m` (section width in meters), `--size` (embroidery size in
+   mm, default `100x100`), `--style` (preset from `styles/` or path to a JSON
+   file), `--set PATH=VALUE` (override single style values), `--format` (pes,
+   dst, jef, …), `--no-inkstitch` (SVG only).
 
-Ergebnis: `out/<name>.svg` (in Inkscape nachbearbeitbar), `out/<name>.pes`,
-`out/<name>_vorschau.png`.
+Output: `out/<name>.svg` (editable in Inkscape), `out/<name>.pes`,
+`out/<name>_preview.png`.
 
-## Stile
+## Styles
 
-Ein Stil legt pro Ebene (Haupt-, Tertiär-, Nebenstraßen, Bahn, Gewässer, Parks,
-Gebäude, Rahmen) fest, ob, wie (Satin, Geradstich, Füllung, Konturfüllung,
-Umriss) und in welcher Farbe gestickt wird, dazu Generalisierung und
-Fadenführung. Standardwerte stehen in `style.py`, Voreinstellungen in
-`styles/*.json` – dort genügen die Abweichungen vom Standard:
+A style defines for each layer (major, tertiary and minor roads, railways,
+water, parks, buildings, frame) whether and how it is stitched (satin, running
+stitch, track, fill, contour fill, outline) and in which color, plus
+generalization and routing settings. Defaults are in `style.py`, presets in
+`styles/*.json`, which only need to contain the differences:
 
-| Stil | Beschreibung |
+| Style | Description |
 |---|---|
-| `toner-wasser` | Schwarz wie Stamen Toner, Wasser blau (2 Garne, Standard) |
-| `toner` | einfarbig, Wasser als offene Füllung |
-| `minimal` | nur Straßen und Uferlinien |
-| `bunt` | Straßen dunkel, Wasser blau, Parks grün, Gebäude grau (4 Garne) |
+| `toner-water` | black, water as a blue fill (2 threads, default) |
+| `toner` | single color, water as an open fill |
+| `minimal` | roads and shorelines only |
+| `colorful` | dark roads, blue water, green parks, grey buildings (4 threads) |
 
-Fadenführung `continuous` (Standard) verbindet möglichst alles über Laufwege, die
-später überstickt werden (~70 % weniger Fadenschnitte); `balanced` schneidet
-früher.
+Routing `continuous` (default) connects as much as possible via travel paths
+that are stitched over later, which saves most thread trims; `balanced` trims
+earlier.
 
-## Testmuster
+## Test pattern
 
-    uv run testmuster.py -o out/testmuster
+    uv run testpattern.py -o out/testpattern
 
-16 nummerierte Felder (92 × 92 mm) mit Varianten von Satinbreite und -dichte,
-Kreuzung, Kanal zwischen Satinstraßen, Geradstich-Wiederholungen und
-Stichlängen, Füllungen und Konturfüllung. Die Parameter je Feld stehen in
-`out/testmuster_legende.txt`. Nach dem Probesticken die besten Werte in den Stil
-übernehmen.
+16 numbered fields (92 × 92 mm) with variants of satin width and spacing,
+junctions, a canal between satin roads, running stitch repeats and stitch
+lengths, fills and contour fills. The parameters of each field are written to
+`out/testpattern_legend.txt`.
 
-## Demo-Website (lokal)
+## Files
 
-    uv run app.py                    # http://127.0.0.1:8000
-    uv run app.py --host 0.0.0.0     # im ganzen Netzwerk erreichbar
-
-### Datenquellen
-
-- **Postpass** (Standard): öffentliche OSM-PostGIS der Geofabrik, weltweit und
-  minutenaktuell. Eine SQL-Abfrage pro Karte (Filter auf die benötigten Tags),
-  Antwort ~0,5 s / ~1 MB für 1 km². Antworten werden mit etwas Rand in
-  `data/cache/postpass/` zwischengespeichert (Standard 24 h, `--cache-hours`),
-  sodass Stiländerungen und kleine Verschiebungen ohne neue Abfrage auskommen.
-  Postpass gibt keine Verfügbarkeitsgarantie.
-- **Lokaler Index** (Ausweichlösung): wenn `data/berlin.sqlite` existiert, wird er
-  bei Postpass-Störungen verwendet, sofern der Ausschnitt darin liegt. Bauen
-  (~75 s, ~270 MB für Berlin):
-
-      uv run osmindex.py /pfad/zu/berlin-latest.osm.pbf data/berlin.sqlite
-
-- `--source local` nutzt nur den lokalen Index, `--source postpass` nur Postpass.
-
-Ablauf pro Auftrag: Daten laden (Postpass ~0,5 s, Cache/Index ~0,1 s) → Generalisierung und
-Routing in Python (<1 s) → Ink/Stitch berechnet Stickdatei und Vorschau
-parallel (~5–15 s). Aufträge laufen nacheinander über eine Warteschlange; die
-Ergebnisse liegen in `web_jobs/<id>/` (Stickdatei, SVG, Vorschau, verwendeter
-Stil als `stil.json`, ZIP mit LIESMICH inkl. OSM-Quellenangabe).
-
-Aufbau:
-
-| Datei | Aufgabe |
+| File | Purpose |
 |---|---|
-| `sources.py` | Datenquellen: Postpass mit Cache, Ausweichlösung |
-| `osmindex.py` | PBF → SQLite/R-Tree; `Index.query()` liefert Ausschnitte |
-| `style.py`, `styles/` | Stil-Schema, Voreinstellungen, Prüfung |
-| `osm2stitch.py` | Generalisierung, Stickarten, Routing, SVG für Ink/Stitch + Schnellansicht |
-| `testmuster.py` | Probestick-Muster mit Parametervarianten |
-| `app.py` | FastAPI-Server, Warteschlange, Ink/Stitch-Aufruf, Statistik, ZIP |
-| `web/index.html` | Oberfläche (Leaflet-Karte mit Rahmen, Einstellungen, Vorschau, Downloads) |
+| `osm2stitch.py` | generalization, stitch types, routing, SVG for Ink/Stitch and quick view |
+| `style.py`, `styles/` | style schema, presets, validation |
+| `sources.py` | data sources: Postpass with cache, fallback |
+| `osmindex.py` | PBF → SQLite/R-tree index |
+| `extract.py` | PBF → JSON extract for the command line |
+| `testpattern.py` | test pattern with parameter variants |
+| `app.py` | FastAPI server, queue, Ink/Stitch calls, statistics, ZIP |
+| `web/index.html` | web interface (Leaflet map with frame, style editor, preview, downloads) |
+
+## Outlook
+
+- A self-hosted PostGIS database as data source instead of Postpass.
+
+## License
+
+Code: [MIT](LICENSE). Map data © OpenStreetMap contributors,
+[ODbL](https://www.openstreetmap.org/copyright).

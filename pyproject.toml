@@ -1,7 +1,8 @@
 [project]
-name = "stitching"
+name = "osm2stitch"
 version = "0.1.0"
-description = "OSM-Karten als Stickdatei (Ink/Stitch)"
+description = "Embroidery files from OpenStreetMap data (via Ink/Stitch)"
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

@@ -1,9 +1,7 @@
 """Turns an OSM section into an SVG ready for Ink/Stitch.
 
 How each object type is stitched (stitch type, width, density, color, on/off)
-is defined in the style (see style.py and styles/*.json). The default is modeled
-on Stamen Toner: roads as satin or triple stitch, building blocks as outlines,
-parks as contour fill, water as a filled area.
+is defined in the style (see style.py and styles/*.json).
 
 All dimensions in the code are in mm on the fabric.
 """
@@ -34,8 +32,8 @@ RAIL = {"rail", "light_rail", "subway"}
 GREEN = {("leisure", "park"), ("landuse", "forest"), ("natural", "wood"), ("landuse", "cemetery")}
 WATER = {("natural", "water"), ("waterway", "riverbank")}
 
-# Parallel lines of a class closer than this distance (in meters, but at least
-# x line width) are merged into one centerline
+# Parallel lines of a class closer than MERGE_M meters (but at least
+# MERGE_FACTOR x line width) are merged into one centerline
 MERGE_M = {"major": 30, "medium": 25, "minor": 0, "rail": 20}
 MERGE_FACTOR = {"major": 1.1, "medium": 1.1, "minor": 1.5, "rail": 2.0}
 
@@ -180,6 +178,27 @@ def satin_rails(line, width):
     return left, right
 
 
+def track_walk(line, width, spacing):
+    """Railway track as one closed running-stitch path: out along the left rail with
+    a spike across to the right rail at every sleeper, back along the right rail.
+    Rails are stitched once, sleepers twice (the two end sleepers once)."""
+    coords = list(line.coords)
+    n = max(1, round(line.length / spacing))
+    ties = [line.length * k / n for k in range(n + 1)]
+    cum = np.cumsum([0] + [math.dist(a, b) for a, b in zip(coords, coords[1:])])
+    # vertices stay so the rails follow curves; those right next to a sleeper merge into it
+    bends = [d for d in cum[1:-1] if min(abs(d - t) for t in ties) > 0.1]
+    stations = sorted([(d, True) for d in ties] + [(d, False) for d in bends])
+    pts = [line.interpolate(d).coords[0] for d, _ in stations]
+    left, right = satin_rails(LineString(pts), width)
+    walk = [left[0]]
+    for i in range(1, len(pts)):
+        walk.append(left[i])
+        if stations[i][1] and i < len(pts) - 1:
+            walk += [right[i], left[i]]
+    return walk + right[::-1] + [left[0]]
+
+
 # ---------------------------------------------------------------- Ordering
 
 def order_paths(items, start):
@@ -219,9 +238,9 @@ class Network:
         tree = STRtree(geoms)
         connectors = []
         for i, line in enumerate(geoms):
-            # connect open lines at both ends, rings (buildings) at their nearest point
-            probes = [line] if line.is_ring else [Point(line.coords[0]), Point(line.coords[-1])]
-            snap = s["ring_snap"] if line.is_ring else s["snap_distance"]
+            # connect open lines at both ends, rings (buildings, tracks) at their nearest point
+            probes = [line] if line.is_closed else [Point(line.coords[0]), Point(line.coords[-1])]
+            snap = s["ring_snap"] if line.is_closed else s["snap_distance"]
             for p in probes:
                 best = None
                 for j in tree.query(p, predicate="dwithin", distance=snap):
@@ -232,7 +251,7 @@ class Network:
                         best = None
                         break
                     # prefer connecting outlines to roads/rail rather than to neighboring outlines
-                    rank = (geoms[j].is_ring, d) if line.is_ring else (False, d)
+                    rank = (geoms[j].is_closed, d) if line.is_closed else (False, d)
                     if best is None or rank < best[0]:
                         best = (rank, j)
                 if best:
@@ -473,11 +492,12 @@ def spiral_ok(poly, spacing):
             return d > spacing
 
 
-
 def line_width(cfg):
     """Visual width of a line on the fabric (for clearances and displacement)."""
     if cfg["stitch"] == "satin":
         return cfg["width"]
+    if cfg["stitch"] == "track":
+        return cfg["width"] + 0.3
     return 0.5 if cfg["repeats"] >= 3 else 0.3
 
 
@@ -581,6 +601,10 @@ def build(data, width_m, w_mm, h_mm, style):
             satins[name] = add_lines([p for l in lines[name] for p in split_sharp(l)], "satin", cfg, layer=name,
                                      width=cfg["width"], density=cfg["density"],
                                      pull_compensation=style["fabric"]["pull_compensation"])
+        elif cfg["stitch"] == "track":
+            # closed path: the router may enter it anywhere, like a building outline
+            walks = [LineString(track_walk(l, cfg["width"], cfg["tie_spacing"])) for l in lines[name]]
+            runs += add_lines(walks, "run", cfg, ring=True, layer=name, **run_kw(cfg))
         else:
             runs += add_lines(lines[name], "run", cfg, layer=name, **run_kw(cfg))
     if "frame" in enabled:
@@ -600,11 +624,11 @@ def build(data, width_m, w_mm, h_mm, style):
         ordered, pos = order_paths([it for it in fills if it["color"] == color], pos)
         for it in ordered:
             it["trim_after"] = True
-        layers.append((f"Flächen {color}", ordered))
+        layers.append((f"Areas {color}", ordered))
         trims += len(ordered)
     for color in run_colors:
         ordered, pos, t = net.route([it for it in runs if it["color"] == color], pos, sewn, s, color)
-        layers.append((f"Linien {color}", ordered))
+        layers.append((f"Lines {color}", ordered))
         trims += t
     for name, items in satin_stages:
         ordered, pos, t = net.route(items, pos, sewn, s, L[name]["color"])
@@ -614,9 +638,9 @@ def build(data, width_m, w_mm, h_mm, style):
     all_items = [it for _, items in layers for it in items]
     stats = {L[name]["label"]: n for name in L
              if (n := sum(1 for it in all_items if it.get("layer") == name))}
-    stats["Laufwege"] = sum(1 for it in all_items if it.get("travel"))
-    stats["Schnitte"] = trims
-    stats["Farben"] = len({it["color"] for it in all_items})
+    stats["Travel paths"] = sum(1 for it in all_items if it.get("travel"))
+    stats["Trims"] = trims
+    stats["Colors"] = len({it["color"] for it in all_items})
     return layers, stats
 
 
@@ -644,15 +668,15 @@ def run_inkstitch(svg, extension, out, **params):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("extract", help="JSON aus extract.py")
-    ap.add_argument("-o", "--output", default="karte", help="Ausgabe-Basisname")
-    ap.add_argument("--width-m", type=float, default=1600, help="Kartenbreite in der Realität")
-    ap.add_argument("--size", default="100x100", help="Stickgröße in mm, BxH")
-    ap.add_argument("--style", default="toner-wasser", help="Stil aus styles/ oder Pfad zu einer JSON-Datei")
-    ap.add_argument("--set", action="append", default=[], metavar="PFAD=WERT",
-                    help="Stilwert ändern, z.B. layers.water.color=#ff0000 oder routing.mode=continuous")
-    ap.add_argument("--format", default="pes", help="Stickformat für Ink/Stitch (pes, dst, jef, ...)")
-    ap.add_argument("--no-inkstitch", action="store_true", help="nur SVG schreiben")
+    ap.add_argument("extract", help="JSON from extract.py")
+    ap.add_argument("-o", "--output", default="map", help="output base name")
+    ap.add_argument("--width-m", type=float, default=1600, help="real-world width of the map in meters")
+    ap.add_argument("--size", default="100x100", help="embroidery size in mm, WxH")
+    ap.add_argument("--style", default="toner-water", help="preset from styles/ or path to a JSON file")
+    ap.add_argument("--set", action="append", default=[], metavar="PATH=VALUE",
+                    help="override a style value, e.g. layers.water.color=#ff0000 or routing.mode=balanced")
+    ap.add_argument("--format", default="pes", help="embroidery format (pes, dst, jef, ...)")
+    ap.add_argument("--no-inkstitch", action="store_true", help="only write the SVG")
     args = ap.parse_args()
 
     overrides = {}
@@ -671,14 +695,14 @@ def main():
     if not args.no_inkstitch:
         emb = Path(f"{args.output}.{args.format}")
         if not run_inkstitch(svg, "output", emb, format=args.format) and strip_spirals(layers):
-            print("Ink/Stitch-Fehler, neuer Versuch ohne Spiralen", file=sys.stderr)
+            print("Ink/Stitch failed, retrying without spirals", file=sys.stderr)
             write_svg(svg, layers, w_mm, h_mm)
             run_inkstitch(svg, "output", emb, format=args.format)
         if emb.stat().st_size:
-            print(f"{emb} geschrieben")
-        png = Path(args.output + "_vorschau.png")
+            print(f"wrote {emb}")
+        png = Path(args.output + "_preview.png")
         if run_inkstitch(svg, "png_realistic", png, dpi=300):
-            print(f"{png} geschrieben")
+            print(f"wrote {png}")
 
 
 if __name__ == "__main__":

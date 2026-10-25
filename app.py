@@ -1,4 +1,4 @@
-"""Local demo website: pick a map section -> download an embroidery file.
+"""Web app: pick a map section, download an embroidery file.
 
     uv run app.py                       # Postpass, local index as fallback
     uv run app.py --source local        # local index only (data/berlin.sqlite)
@@ -47,7 +47,7 @@ class JobRequest(BaseModel):
     size_w: float = Field(ge=30, le=400)
     size_h: float = Field(ge=30, le=400)
     format: str = "pes"
-    style: str = Field("toner-wasser", pattern=r"^[a-z0-9-]+$")
+    style: str = Field("toner-water", pattern=r"^[a-z0-9-]+$")
     overrides: dict = {}
 
 
@@ -71,7 +71,7 @@ class Job:
                 "files": {k: f"files/{self.id}/{v}" for k, v in self.files.items()}}
 
 
-app = FastAPI(title="OSM-Stickkarte")
+app = FastAPI(title="osm2stitch")
 jobs: dict[str, Job] = {}
 pending: queue.Queue[Job] = queue.Queue()
 source = None  # Index, PostpassSource or FallbackSource
@@ -119,45 +119,45 @@ def process(job):
     job.status = "geometry"
     t0 = time.time()
     layers, stats = build(data, r.width_m, r.size_w, r.size_h, job.style)
-    write_svg(job.dir / "karte.svg", layers, r.size_w, r.size_h)
-    write_preview_svg(job.dir / "schnellansicht.svg", layers, r.size_w, r.size_h, job.style["fabric"]["color"])
-    (job.dir / "stil.json").write_text(json.dumps(job.style, ensure_ascii=False, indent=2))
+    write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h)
+    write_preview_svg(job.dir / "quickview.svg", layers, r.size_w, r.size_h, job.style["fabric"]["color"])
+    (job.dir / "style.json").write_text(json.dumps(job.style, ensure_ascii=False, indent=2))
     job.geometry = {"objects": stats, "seconds": round(time.time() - t0, 1)}
-    job.files.update(svg="karte.svg", preview_svg="schnellansicht.svg")
+    job.files.update(svg="map.svg", preview_svg="quickview.svg")
 
     job.status = "inkstitch"
     t0 = time.time()
-    emb = job.dir / f"karte.{r.format}"
-    png = job.dir / "stickvorschau.png"
+    emb = job.dir / f"map.{r.format}"
+    png = job.dir / "preview.png"
     try:
-        run_inkstitch_parallel(job.dir / "karte.svg", emb, png, r.format)
+        run_inkstitch_parallel(job.dir / "map.svg", emb, png, r.format)
     except RuntimeError:
         # Ink/Stitch occasionally fails on spiral contour fills -> retry without spirals
         if not strip_spirals(layers):
             raise
-        write_svg(job.dir / "karte.svg", layers, r.size_w, r.size_h)
-        run_inkstitch_parallel(job.dir / "karte.svg", emb, png, r.format)
+        write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h)
+        run_inkstitch_parallel(job.dir / "map.svg", emb, png, r.format)
     job.files.update(embroidery=emb.name, png=png.name)
     job.result = embroidery_stats(emb) | {"seconds": round(time.time() - t0, 1)}
 
     readme = (
-        "OSM-Stickkarte\n==============\n\n"
-        f"Mittelpunkt: {r.lat:.6f}, {r.lon:.6f}\n"
-        f"Ausschnitt:  {r.width_m:.0f} m x {height_m:.0f} m\n"
-        f"Stickgröße:  {r.size_w:.0f} x {r.size_h:.0f} mm  (1 mm = {r.width_m / r.size_w:.1f} m)\n"
-        f"Stil:        {job.style['name']} (Einstellungen in stil.json)\n"
-        f"Stiche:      {job.result['stitches']}, Fadenschnitte: {job.result['trims']}, "
-        f"geschätzt ca. {job.result['minutes']} min\n"
-        f"Garne (in Stickreihenfolge): {', '.join(job.result['threads'])}\n\n"
-        "karte.svg kann in Inkscape mit Ink/Stitch weiterbearbeitet werden.\n\n"
-        f"Kartendaten: © OpenStreetMap-Mitwirkende, ODbL – https://www.openstreetmap.org/copyright\n"
-        f"Datenquelle: {job.data_source['name']}, Stand {job.data_source.get('timestamp') or '?'}\n"
+        "osm2stitch\n==========\n\n"
+        f"Center:     {r.lat:.6f}, {r.lon:.6f}\n"
+        f"Section:    {r.width_m:.0f} m x {height_m:.0f} m\n"
+        f"Size:       {r.size_w:.0f} x {r.size_h:.0f} mm  (1 mm = {r.width_m / r.size_w:.1f} m)\n"
+        f"Style:      {job.style['name']} (settings in style.json)\n"
+        f"Stitches:   {job.result['stitches']}, trims: {job.result['trims']}, "
+        f"approx. {job.result['minutes']} min\n"
+        f"Threads (in stitching order): {', '.join(job.result['threads'])}\n\n"
+        "map.svg can be edited in Inkscape with Ink/Stitch.\n\n"
+        "Map data: © OpenStreetMap contributors, ODbL – https://www.openstreetmap.org/copyright\n"
+        f"Data source: {job.data_source['name']}, as of {job.data_source.get('timestamp') or '?'}\n"
     )
-    (job.dir / "LIESMICH.txt").write_text(readme)
-    with zipfile.ZipFile(job.dir / "stickkarte.zip", "w", zipfile.ZIP_DEFLATED) as z:
-        for name in (emb.name, "karte.svg", png.name, "stil.json", "LIESMICH.txt"):
+    (job.dir / "README.txt").write_text(readme)
+    with zipfile.ZipFile(job.dir / "osm2stitch.zip", "w", zipfile.ZIP_DEFLATED) as z:
+        for name in (emb.name, "map.svg", png.name, "style.json", "README.txt"):
             z.write(job.dir / name, name)
-    job.files["zip"] = "stickkarte.zip"
+    job.files["zip"] = "osm2stitch.zip"
     job.status = "done"
 
 
@@ -167,7 +167,7 @@ def worker():
         try:
             process(job)
         except SourceError as e:
-            job.status, job.error = "error", f"Kartendaten konnten nicht geladen werden: {e}"
+            job.status, job.error = "error", f"Could not load map data: {e}"
         except Exception as e:
             traceback.print_exc()
             job.status, job.error = "error", str(e)
@@ -195,14 +195,14 @@ def styles():
 @app.post("/api/jobs")
 def create_job(req: JobRequest):
     if req.format not in FORMATS:
-        raise HTTPException(400, f"Unbekanntes Format: {req.format}")
+        raise HTTPException(400, f"Unknown format: {req.format}")
     try:
         style = load_style(req.style, req.overrides)
     except (ValueError, KeyError, TypeError) as e:
-        raise HTTPException(400, f"Ungültiger Stil: {e}")
+        raise HTTPException(400, f"Invalid style: {e}")
     height_m = req.width_m * req.size_h / req.size_w
     if not source.covers(bbox_around(req.lat, req.lon, req.width_m, height_m)):
-        raise HTTPException(400, "Der Ausschnitt liegt (teilweise) außerhalb der geladenen OSM-Daten.")
+        raise HTTPException(400, "The section lies (partly) outside the available OSM data.")
     job = Job(req, style)
     jobs[job.id] = job
     pending.put(job)
@@ -212,7 +212,7 @@ def create_job(req: JobRequest):
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
     if not re.fullmatch(r"[0-9a-f]{10}", job_id) or job_id not in jobs:
-        raise HTTPException(404, "Unbekannter Auftrag")
+        raise HTTPException(404, "Unknown job")
     job = jobs[job_id]
     position = None
     if job.status == "queued":
@@ -224,10 +224,10 @@ def main():
     global source
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", choices=("auto", "postpass", "local"), default="auto",
-                    help="auto = Postpass, bei Störung lokaler Index (falls vorhanden)")
-    ap.add_argument("--db", default=str(ROOT / "data" / "berlin.sqlite"), help="Index aus osmindex.py")
+                    help="auto = Postpass, local index if Postpass fails (if present)")
+    ap.add_argument("--db", default=str(ROOT / "data" / "berlin.sqlite"), help="index built by osmindex.py")
     ap.add_argument("--cache-dir", default=str(ROOT / "data" / "cache" / "postpass"))
-    ap.add_argument("--cache-hours", type=float, default=24, help="wie lange Postpass-Antworten gültig bleiben")
+    ap.add_argument("--cache-hours", type=float, default=24, help="how long Postpass responses stay valid")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
@@ -235,7 +235,7 @@ def main():
     local = Index(args.db) if args.source != "postpass" and Path(args.db).exists() else None
     if args.source == "local":
         if local is None:
-            raise SystemExit(f"Lokaler Index fehlt: {args.db} (mit osmindex.py bauen)")
+            raise SystemExit(f"Local index missing: {args.db} (build it with osmindex.py)")
         source = local
     else:
         source = PostpassSource(args.cache_dir, ttl_hours=args.cache_hours)
@@ -244,7 +244,7 @@ def main():
     JOBS_DIR.mkdir(exist_ok=True)
     app.mount("/files", StaticFiles(directory=JOBS_DIR), name="files")
     threading.Thread(target=worker, daemon=True).start()
-    print(f"Datenquelle: {source.describe()}")
+    print(f"Data source: {source.describe()}")
     uvicorn.run(app, host=args.host, port=args.port)
 
 
