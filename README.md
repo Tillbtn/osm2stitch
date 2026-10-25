@@ -2,8 +2,7 @@
 
 Turns OpenStreetMap data into embroidery files. The map is generalized and
 converted into an SVG for [Ink/Stitch](https://inkstitch.org), which then
-produces the embroidery file (PES, DST, JEF, …) and a realistic preview without
-the Inkscape GUI.
+produces the embroidery file (PES, DST, JEF, …) and a realistic preview.
 
 ## Setup
 
@@ -15,53 +14,44 @@ called headless via `bin/inkstitch`.
 ## Web app
 
     uv run app.py                    # http://127.0.0.1:8000
-    uv run app.py --host 0.0.0.0     # reachable on the local network
 
 Pick a section on the map, choose hoop size, scale and style, and download the
 embroidery file or a ZIP with the SVG, preview, style settings and attribution.
 Jobs are processed one after another through a queue; results are stored in
 `web_jobs/<id>/`.
 
-### Data sources
+## How a map is built
 
-- **Postpass** (default): Geofabrik's public OSM PostGIS API. One SQL query per
-  map, filtered to the tags that are used. Responses are cached with some margin
-  in `data/cache/postpass/` (24 h by default, `--cache-hours`), so style changes
-  and small shifts need no new query.
-- **Local index** (fallback): if `data/berlin.sqlite` exists, it is used when
-  Postpass fails and the section lies within it. Build it from a PBF:
-
-      uv run osmindex.py berlin-latest.osm.pbf data/berlin.sqlite
-
-`--source local` uses only the local index, `--source postpass` only Postpass.
-
-## Command line
-
-1. Extract the relevant objects from a PBF once:
-
-       uv run extract.py berlin-latest.osm.pbf --lat 52.498751 --lon 13.381239 -o kreuzberg.json
-
-2. Generate maps from it:
-
-       uv run osm2stitch.py kreuzberg.json -o out/kreuzberg --width-m 800
-       uv run osm2stitch.py kreuzberg.json -o out/colorful --width-m 800 --style colorful
-       uv run osm2stitch.py kreuzberg.json -o out/test --set layers.major.width=1.6 --set routing.mode=balanced
-
-   Options: `--width-m` (section width in meters), `--size` (embroidery size in
-   mm, default `100x100`), `--style` (preset from `styles/` or path to a JSON
-   file), `--set PATH=VALUE` (override single style values), `--format` (pes,
-   dst, jef, …), `--no-inkstitch` (SVG only).
-
-Output: `out/<name>.svg` (editable in Inkscape), `out/<name>.pes`,
-`out/<name>_preview.png`.
+1. **Data:** one SQL query to Postpass (Geofabrik's public OSM PostGIS API),
+   filtered to the tags that are used. Responses are cached with some margin in
+   `data/cache/postpass/` (24 h by default), so style changes and small shifts
+   need no new query.
+2. **Classification:** roads by class, railways, water, parks/forest and
+   buildings; tunnels, covered and underground objects are skipped.
+3. **Projection:** UTM via pyproj, scaled to mm on the fabric.
+4. **Lines** (shapely): parallel lines of a class (dual carriageways, track
+   bundles) are merged into one centerline via a Voronoi skeleton; lines running
+   along a higher class are dropped; satin roads end at crossing satin roads and
+   are split at sharp bends.
+5. **Areas:** kept clear of lines, cleaned by morphological opening/closing,
+   simplified, small parts and holes dropped; buildings merged into blocks.
+6. **Stitch types** per layer from the style: satin, running stitch, track
+   (rails with sleepers), tatami fill, contour fill (as a single spiral where
+   possible) or outline.
+7. **Routing** (networkx): all lines form a network; objects are ordered
+   greedily, connected by travel paths over lines that are stitched over later,
+   with a thread trim only where no such path exists. Order: areas, running
+   stitches, satins, grouped by color.
+8. **Stitches:** the SVG with Ink/Stitch attributes is passed to the Ink/Stitch
+   CLI, which computes the embroidery file and the preview in parallel.
+   pyembroidery reads the result for stitch count, trims and estimated time.
 
 ## Styles
 
 A style defines for each layer (major, tertiary and minor roads, railways,
-water, parks, buildings, frame) whether and how it is stitched (satin, running
-stitch, track, fill, contour fill, outline) and in which color, plus
-generalization and routing settings. Defaults are in `style.py`, presets in
-`styles/*.json`, which only need to contain the differences:
+water, parks, buildings, frame) whether and how it is stitched and in which
+color, plus generalization and routing settings. Defaults are in `style.py`,
+presets in `styles/*.json`, which only need to contain the differences:
 
 | Style | Description |
 |---|---|
@@ -70,9 +60,8 @@ generalization and routing settings. Defaults are in `style.py`, presets in
 | `minimal` | roads and shorelines only |
 | `colorful` | dark roads, blue water, green parks, grey buildings (4 threads) |
 
-Routing `continuous` (default) connects as much as possible via travel paths
-that are stitched over later, which saves most thread trims; `balanced` trims
-earlier.
+Routing `continuous` (default) connects as much as possible via travel paths;
+`balanced` trims earlier.
 
 ## Test pattern
 
@@ -89,16 +78,12 @@ lengths, fills and contour fills. The parameters of each field are written to
 |---|---|
 | `osm2stitch.py` | generalization, stitch types, routing, SVG for Ink/Stitch and quick view |
 | `style.py`, `styles/` | style schema, presets, validation |
-| `sources.py` | data sources: Postpass with cache, fallback |
-| `osmindex.py` | PBF → SQLite/R-tree index |
-| `extract.py` | PBF → JSON extract for the command line |
+| `sources.py` | data sources: Postpass with cache, optional local fallback |
+| `osmindex.py` | PBF → SQLite/R-tree index for the local fallback |
+| `extract.py` | PBF → JSON extract for `osm2stitch.py` on the command line |
 | `testpattern.py` | test pattern with parameter variants |
 | `app.py` | FastAPI server, queue, Ink/Stitch calls, statistics, ZIP |
 | `web/index.html` | web interface (Leaflet map with frame, style editor, preview, downloads) |
-
-## Outlook
-
-- A self-hosted PostGIS database as data source instead of Postpass.
 
 ## License
 
