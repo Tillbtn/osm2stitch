@@ -19,7 +19,7 @@ from shapely import STRtree, wkt
 import networkx as nx
 from shapely.geometry import LineString, MultiLineString, Point, Polygon, box
 from shapely.ops import linemerge, nearest_points, unary_union
-from xml.sax.saxutils import quoteattr
+from xml.sax.saxutils import escape, quoteattr
 
 from style import AREA_LAYERS, LINE_LAYERS, ROUTING, load_style, set_path
 
@@ -41,6 +41,9 @@ MERGE_FACTOR = {"major": 1.1, "medium": 1.1, "minor": 1.5, "rail": 2.0}
 # Tunnels and covered sections up to this length that connect visible lines of the
 # same class at both ends (e.g. under a wide bridge) are stitched like the surface
 PASSAGE_M = 100
+
+OSM_SOURCE = "https://www.openstreetmap.org"
+OSM_RIGHTS = "Map data © OpenStreetMap contributors, ODbL – https://www.openstreetmap.org/copyright"
 
 
 # ---------------------------------------------------------------- Geometry
@@ -409,14 +412,25 @@ def svg_element(it, ident):
     return f"    <path {attrs(base)} />"
 
 
-def write_svg(path, layers, w, h):
+def rdf_metadata(meta):
+    """Dublin Core metadata, shown by Inkscape under Document Properties > Metadata."""
+    if not meta:
+        return ""
+    fields = "".join(f"<dc:{k}>{escape(str(v))}</dc:{k}>" for k, v in meta.items() if v)
+    return (f'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+            f'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#">'
+            f'<cc:Work rdf:about="">{fields}</cc:Work></rdf:RDF>')
+
+
+def write_svg(path, layers, w, h, meta=None):
     out = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" '
         f'xmlns:inkstitch="http://inkstitch.org/namespace" '
         f'width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">',
-        f'  <metadata><inkstitch:inkstitch_svg_version>4</inkstitch:inkstitch_svg_version></metadata>',
+        f'  <metadata><inkstitch:inkstitch_svg_version>4</inkstitch:inkstitch_svg_version>'
+        f'{rdf_metadata(meta)}</metadata>',
     ]
     n = 0
     for name, items in layers:
@@ -425,6 +439,50 @@ def write_svg(path, layers, w, h):
             n += 1
             out.append(svg_element(it, f"{it['kind']}{n}"))
         out.append("  </g>")
+    out.append("</svg>")
+    Path(path).write_text("\n".join(out))
+
+
+def write_plain_svg(path, plain, style, w, h, meta=None):
+    """Plain SVG for further editing: the generalized geometry before conversion
+    to stitches, one Inkscape layer per map layer, no Ink/Stitch parameters,
+    no travel paths. Lines are single centerlines with the stitched width."""
+    L = style["layers"]
+    out = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" '
+        f'xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" '
+        f'width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">',
+        f'  <metadata>{rdf_metadata(meta)}</metadata>',
+        # fabric color as page color instead of a rectangle that would be stitched
+        f'  <sodipodi:namedview pagecolor="{style["fabric"]["color"]}" inkscape:pageopacity="1" '
+        f'inkscape:document-units="mm" />',
+    ]
+
+    def layer(name, elements):
+        if elements:
+            out.append(f'  <g id="{name}" inkscape:groupmode="layer" inkscape:label={quoteattr(L[name]["label"])}>')
+            out.extend(f'    <path id="{name}{i}" {e} />' for i, e in enumerate(elements, 1))
+            out.append("  </g>")
+
+    for name, polys in plain["areas"].items():
+        cfg = L[name]
+        if cfg["stitch"] == "outline":
+            st = f"fill:none;stroke:{cfg['color']};stroke-width:{line_width(cfg)};stroke-linejoin:round"
+        else:
+            st = f"fill:{cfg['color']};fill-opacity:{fill_opacity(cfg)};fill-rule:evenodd;stroke:none"
+        layer(name, [f'd="{path_d_poly(p)}" style="{st}"' for p in polys])
+    for name in reversed(LINE_LAYERS):  # higher classes on top
+        if name in plain["lines"]:
+            cfg = L[name]
+            st = (f"fill:none;stroke:{cfg['color']};stroke-width:{line_width(cfg)};"
+                  "stroke-linecap:round;stroke-linejoin:round")
+            layer(name, [f'd="M {fmt(l.coords)}" style="{st}"' for l in plain["lines"][name]])
+    if plain["frame"]:
+        cfg = L["frame"]
+        layer("frame", [f'd="M 0,0 H {w} V {h} H 0 Z" '
+                        f'style="fill:none;stroke:{cfg["color"]};stroke-width:{line_width(cfg)}"'])
     out.append("</svg>")
     Path(path).write_text("\n".join(out))
 
@@ -524,6 +582,13 @@ def spiral_ok(poly, spacing):
             return d > spacing
 
 
+def fill_opacity(cfg):
+    """Display opacity of a fill, hinting at its density."""
+    if cfg["stitch"] == "contour":
+        return 0.18
+    return 1 if cfg["row_spacing"] <= 0.4 else 0.4
+
+
 def line_width(cfg):
     """Visual width of a line on the fabric (for clearances and displacement)."""
     if cfg["stitch"] == "satin":
@@ -609,6 +674,11 @@ def build(data, width_m, w_mm, h_mm, style):
                                 .difference(areas["water"].buffer(0.5))
                                 .difference(areas["buildings"].buffer(0.3)), s)
 
+    # Generalized geometry before conversion to stitches, for the plain SVG
+    plain = {"lines": {name: lines[name] for name in LINE_LAYERS if name in enabled},
+             "areas": {name: polys_of(areas[name]) for name in AREA_LAYERS if name in enabled},
+             "frame": "frame" in enabled}
+
     # Create objects; coordinates rounded so they lie exactly on network nodes
     net_lines = []
 
@@ -637,8 +707,7 @@ def build(data, width_m, w_mm, h_mm, style):
             runs += add_lines(rings, "run", cfg, ring=True, layer=name, **run_kw(cfg))
         else:
             contour = cfg["stitch"] == "contour"
-            opacity = 0.18 if contour else (1 if cfg["row_spacing"] <= 0.4 else 0.4)
-            fills += [poly_item(p, "fill", layer=name, color=cfg["color"], opacity=opacity,
+            fills += [poly_item(p, "fill", layer=name, color=cfg["color"], opacity=fill_opacity(cfg),
                                 method="contour_fill" if contour else "tatami_fill",
                                 angle=cfg["angle"], row_spacing=cfg["row_spacing"],
                                 stitch_length=cfg["stitch_length"], underlay=cfg["underlay"],
@@ -690,7 +759,7 @@ def build(data, width_m, w_mm, h_mm, style):
     stats["Travel paths"] = sum(1 for it in all_items if it.get("travel"))
     stats["Trims"] = trims
     stats["Colors"] = len({it["color"] for it in all_items})
-    return layers, stats
+    return layers, stats, plain
 
 
 def strip_spirals(layers):
@@ -701,6 +770,14 @@ def strip_spirals(layers):
             if it.get("strategy") is not None:
                 it["strategy"], found = None, True
     return found
+
+
+def inkstitch_version():
+    """Version of the installed Ink/Stitch, e.g. 'v3.3.0 (linux-x86_64) 2026-07-31 09:01'."""
+    try:
+        return (INKSTITCH.parent.parent / "VERSION").read_text().strip() or "unknown"
+    except OSError:
+        return "unknown"
 
 
 def inkstitch_cmd(svg, extension, **params):
@@ -735,17 +812,20 @@ def main():
     style = load_style(args.style, overrides)
     w_mm, h_mm = (float(v) for v in args.size.lower().split("x"))
     data = json.load(open(args.extract))
-    layers, stats = build(data, args.width_m, w_mm, h_mm, style)
+    layers, stats, plain = build(data, args.width_m, w_mm, h_mm, style)
+    meta = {"title": f"osm2stitch {args.extract}", "source": OSM_SOURCE, "rights": OSM_RIGHTS,
+            "description": f"Style: {style['name']}\nInk/Stitch: {inkstitch_version()}"}
     svg = Path(args.output + ".svg")
     svg.parent.mkdir(parents=True, exist_ok=True)
-    write_svg(svg, layers, w_mm, h_mm)
+    write_svg(svg, layers, w_mm, h_mm, meta)
+    write_plain_svg(Path(args.output + "_plain.svg"), plain, style, w_mm, h_mm, meta)
     print(f"{svg}: " + ", ".join(f"{k} {v}" for k, v in stats.items()))
 
     if not args.no_inkstitch:
         emb = Path(f"{args.output}.{args.format}")
         if not run_inkstitch(svg, "output", emb, format=args.format) and strip_spirals(layers):
             print("Ink/Stitch failed, retrying without spirals", file=sys.stderr)
-            write_svg(svg, layers, w_mm, h_mm)
+            write_svg(svg, layers, w_mm, h_mm, meta)
             run_inkstitch(svg, "output", emb, format=args.format)
         if emb.stat().st_size:
             print(f"wrote {emb}")

@@ -25,7 +25,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from osm2stitch import build, inkstitch_cmd, strip_spirals, write_preview_svg, write_svg
+from osm2stitch import (OSM_RIGHTS, OSM_SOURCE, build, inkstitch_cmd, inkstitch_version, strip_spirals,
+                        write_plain_svg, write_preview_svg, write_svg)
 from osmindex import Index
 from sources import FallbackSource, PostpassSource, SourceError, bbox_around
 from style import LAYERS, RANGES, ROUTING, STITCHES, layer_type, list_presets, load_style
@@ -62,12 +63,14 @@ class Job:
         self.data_source = None
         self.result = None
         self.files = {}
+        self.inkstitch = None
         self.created = time.time()
         self.dir = JOBS_DIR / self.id
 
     def public(self, position=None):
         return {"id": self.id, "status": self.status, "error": self.error, "queue_position": position,
                 "geometry": self.geometry, "result": self.result, "data_source": self.data_source,
+                "inkstitch": self.inkstitch,
                 "files": {k: f"files/{self.id}/{v}" for k, v in self.files.items()}}
 
 
@@ -118,12 +121,24 @@ def process(job):
 
     job.status = "geometry"
     t0 = time.time()
-    layers, stats = build(data, r.width_m, r.size_w, r.size_h, job.style)
-    write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h)
+    job.inkstitch = inkstitch_version()
+    meta = {
+        "title": f"osm2stitch {r.lat:.6f}, {r.lon:.6f}",
+        "date": time.strftime("%Y-%m-%d"),
+        "source": OSM_SOURCE,
+        "rights": OSM_RIGHTS,
+        "description": f"Section: {r.width_m:.0f} m x {height_m:.0f} m, size {r.size_w:.0f} x {r.size_h:.0f} mm\n"
+                       f"Style: {job.style['name']}\n"
+                       f"Ink/Stitch: {job.inkstitch}\n"
+                       f"Data: {job.data_source['name']}, as of {job.data_source.get('timestamp') or '?'}",
+    }
+    layers, stats, plain = build(data, r.width_m, r.size_w, r.size_h, job.style)
+    write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h, meta)
+    write_plain_svg(job.dir / "map_plain.svg", plain, job.style, r.size_w, r.size_h, meta)
     write_preview_svg(job.dir / "quickview.svg", layers, r.size_w, r.size_h, job.style["fabric"]["color"])
     (job.dir / "style.json").write_text(json.dumps(job.style, ensure_ascii=False, indent=2))
     job.geometry = {"objects": stats, "seconds": round(time.time() - t0, 1)}
-    job.files.update(svg="map.svg", preview_svg="quickview.svg")
+    job.files.update(svg="map.svg", plain_svg="map_plain.svg", preview_svg="quickview.svg")
 
     job.status = "inkstitch"
     t0 = time.time()
@@ -135,10 +150,10 @@ def process(job):
         # Ink/Stitch occasionally fails on spiral contour fills -> retry without spirals
         if not strip_spirals(layers):
             raise
-        write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h)
+        write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h, meta)
         run_inkstitch_parallel(job.dir / "map.svg", emb, png, r.format)
     job.files.update(embroidery=emb.name, png=png.name)
-    job.result = embroidery_stats(emb) | {"seconds": round(time.time() - t0, 1)}
+    job.result = embroidery_stats(emb) | {"seconds": round(time.time() - t0, 1), "inkstitch": job.inkstitch}
 
     readme = (
         "osm2stitch\n==========\n\n"
@@ -148,14 +163,17 @@ def process(job):
         f"Style:      {job.style['name']} (settings in style.json)\n"
         f"Stitches:   {job.result['stitches']}, trims: {job.result['trims']}, "
         f"approx. {job.result['minutes']} min\n"
-        f"Threads (in stitching order): {', '.join(job.result['threads'])}\n\n"
-        "map.svg can be edited in Inkscape with Ink/Stitch.\n\n"
-        "Map data: © OpenStreetMap contributors, ODbL – https://www.openstreetmap.org/copyright\n"
+        f"Threads (in stitching order): {', '.join(job.result['threads'])}\n"
+        f"Ink/Stitch: {job.inkstitch}\n\n"
+        "map.svg        Ink/Stitch file as stitched (with stitch parameters and travel paths)\n"
+        "map_plain.svg  plain generalized map: one layer per map layer, lines as centerlines,\n"
+        "               no Ink/Stitch parameters – for your own edits in Inkscape\n\n"
+        f"{OSM_RIGHTS}\n"
         f"Data source: {job.data_source['name']}, as of {job.data_source.get('timestamp') or '?'}\n"
     )
     (job.dir / "README.txt").write_text(readme)
     with zipfile.ZipFile(job.dir / "osm2stitch.zip", "w", zipfile.ZIP_DEFLATED) as z:
-        for name in (emb.name, "map.svg", png.name, "style.json", "README.txt"):
+        for name in (emb.name, "map.svg", "map_plain.svg", png.name, "style.json", "README.txt"):
             z.write(job.dir / name, name)
     job.files["zip"] = "osm2stitch.zip"
     job.status = "done"

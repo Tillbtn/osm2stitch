@@ -16,7 +16,19 @@ called headless via `bin/inkstitch`.
     uv run app.py                    # http://127.0.0.1:8000
 
 Pick a section on the map, choose hoop size, scale and style, and download the
-embroidery file or a ZIP with the SVG, preview, style settings and attribution.
+embroidery file, a plain SVG, or a ZIP with everything (embroidery file, both
+SVGs, preview, style settings, attribution).
+
+- `map.svg` is the Ink/Stitch file exactly as stitched: stitch parameters, travel
+  paths and stitch order.
+- `map_plain.svg` is the generalized map before conversion to stitches: one
+  Inkscape layer per map layer, roads and railways as centerlines with their
+  stitched width, no Ink/Stitch parameters. Use it as a starting point for your
+  own edits.
+
+Both SVGs and the `README.txt` in the ZIP record the Ink/Stitch version used
+(read from its `VERSION` file); Inkscape shows it under Document Properties ›
+Metadata.
 Jobs are processed one after another through a queue; results are stored in
 `web_jobs/<id>/`.
 

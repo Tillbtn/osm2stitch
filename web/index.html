@@ -416,11 +416,12 @@ function showResult(j) {
   $("#stats").innerHTML = tiles.map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
   const ds = j.data_source;
   $("#dataSource").innerHTML = ds ? `Data: ${esc(ds.name)}, as of ${esc((ds.timestamp || "?").replace("T", " ").slice(0, 16))}`
-    + (ds.cached ? " (cached)" : "") + (ds.note ? `<br><span class="warn" style="display:block;margin-top:6px">${esc(ds.note)}</span>` : "") : "";
+    + (ds.cached ? " (cached)" : "") + (j.inkstitch ? ` · Ink/Stitch ${esc(j.inkstitch.split(" ")[0])}` : "") + (ds.note ? `<br><span class="warn" style="display:block;margin-top:6px">${esc(ds.note)}</span>` : "") : "";
   $("#threads").innerHTML = r ? "Threads in order: " + r.threads.map(c => `<span class="swatch" style="background:${c}" title="${c}"></span>`).join("") : "";
   const f = j.files, fmt = f.embroidery ? f.embroidery.split(".").pop().toUpperCase() : "";
   $("#downloads").innerHTML = r ? `
     <a class="primary" href="${f.embroidery}" download>Download embroidery file (${fmt})</a>
+    <a href="${f.plain_svg}" download="map_plain.svg">Plain SVG (for your own edits)</a>
     <a href="${f.zip}" download>Everything as ZIP (incl. SVG for Inkscape)</a>` : "";
 }
 function renderPreview() {
