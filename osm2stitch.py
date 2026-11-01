@@ -37,6 +37,9 @@ WATER = {("natural", "water"), ("waterway", "riverbank")}
 # MERGE_FACTOR x line width) are merged into one centerline
 MERGE_M = {"major": 30, "medium": 25, "minor": 0, "rail": 20}
 MERGE_FACTOR = {"major": 1.1, "medium": 1.1, "minor": 1.5, "rail": 2.0}
+# Overlaps with a higher class count as parallel only below this angle (degrees);
+# steeper ones are crossings, e.g. a wide railway track under a road bridge
+PARALLEL_ANGLE = 30
 
 # Tunnels and covered sections up to this length that connect visible lines of the
 # same class at both ends (e.g. under a wide bridge) are stitched like the surface
@@ -88,15 +91,31 @@ def merge_lines(lines, s):
     return [l.simplify(s["simplify"]) for l in lines_of(merged) if l.length >= s["min_line"]]
 
 
-def drop_parallel(lines, blocker, s):
-    """Removes long sections running inside `blocker` (e.g. the second carriageway
-    of a dual carriageway), but keeps short overlaps at junctions."""
+def drop_parallel(lines, blocker, s, guides=()):
+    """Removes long sections running inside `blocker` along one of the `guides`
+    (the higher-class lines; e.g. the second carriageway of a dual carriageway),
+    but keeps short overlaps at junctions and lines crossing at an angle."""
     if blocker is None or blocker.is_empty:
         return lines
+    tree = STRtree(guides) if guides else None
+    min_cos = math.cos(math.radians(PARALLEL_ANGLE))
+
+    def along(p):
+        if tree is None:
+            return True
+        mid = p.interpolate(0.5, normalized=True)
+        g = guides[tree.nearest(mid)]
+        d = g.project(mid)
+        a, b = g.interpolate(max(d - 0.5, 0)), g.interpolate(min(d + 0.5, g.length))
+        (x0, y0), (x1, y1) = p.coords[0], p.coords[-1]
+        u, v = (b.x - a.x, b.y - a.y), (x1 - x0, y1 - y0)
+        n = math.hypot(*u) * math.hypot(*v)
+        return n == 0 or abs(u[0] * v[0] + u[1] * v[1]) / n > min_cos
+
     keep = []
     for line in lines:
         inside = line.intersection(blocker)
-        long_inside = [p for p in lines_of(inside) if p.length > s["parallel_min_length"]]
+        long_inside = [p for p in lines_of(inside) if p.length > s["parallel_min_length"] and along(p)]
         if not long_inside:
             keep.append(line)
             continue
@@ -640,7 +659,7 @@ def build(data, width_m, w_mm, h_mm, style):
 
     # Lines in descending priority: merge, remove parallels to higher classes,
     # cut satin at crossing satin
-    lines, covered, satin_cover, blocking = {}, None, None, Polygon()
+    lines, covered, satin_cover, blocking, guides = {}, None, None, Polygon(), []
     for name in LINE_LAYERS:
         cfg, w = L[name], line_width(L[name])
         # lines extending beyond the frame make the skeleton reach all the way to the edge
@@ -649,9 +668,9 @@ def build(data, width_m, w_mm, h_mm, style):
         if cfg["stitch"] == "satin" and satin_cover is not None:
             ls = cut_lines(ls, satin_cover.buffer(-0.15), s)
             other = blocking.difference(satin_cover)
-            ls = drop_parallel(ls, other.buffer(w) if not other.is_empty else None, s)
+            ls = drop_parallel(ls, other.buffer(w) if not other.is_empty else None, s, guides)
         elif not blocking.is_empty:
-            ls = drop_parallel(ls, blocking.buffer(w), s)
+            ls = drop_parallel(ls, blocking.buffer(w), s, guides)
         lines[name] = ls
         if ls:
             area = unary_union([l.buffer(w / 2) for l in ls])
@@ -661,6 +680,7 @@ def build(data, width_m, w_mm, h_mm, style):
             if below[name]:
                 area = area.difference(unary_union(below[name]).buffer(w / 2 + 0.1))
             blocking = blocking.union(area)
+            guides += ls
 
     # Areas: keep space free for lines so nothing is stitched on top of each other
     keepout = covered.buffer(s["road_clearance"]) if covered is not None else Polygon()
