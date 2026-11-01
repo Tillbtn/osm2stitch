@@ -26,8 +26,10 @@ Jobs are processed one after another through a queue; results are stored in
    filtered to the tags that are used. Responses are cached with some margin in
    `data/cache/postpass/` (24 h by default), so style changes and small shifts
    need no new query.
-2. **Classification:** roads by class, railways, water, parks/forest and
-   buildings; tunnels, covered and underground objects are skipped.
+2. **Classification:** roads by class, railways, water, green areas (parks,
+   gardens, playgrounds, forest, cemeteries) and buildings. Tunnels, covered and
+   underground objects are skipped, except short passages (up to 100 m, e.g.
+   under a wide bridge) that connect visible lines at both ends.
 3. **Projection:** UTM via pyproj, scaled to mm on the fabric.
 4. **Lines** (shapely): parallel lines of a class (dual carriageways, track
    bundles) are merged into one centerline via a Voronoi skeleton; lines running

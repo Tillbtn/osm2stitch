@@ -9,6 +9,7 @@ All sources return the same format via `query(lat, lon, width_m, height_m)`:
 - FallbackSource: Postpass first, the local index on failure (if it covers the section)
 """
 import gzip
+import hashlib
 import json
 import math
 import sqlite3
@@ -81,6 +82,15 @@ class PostpassSource:
             con.execute("""CREATE TABLE IF NOT EXISTS cache(
                 file TEXT PRIMARY KEY, minx REAL, miny REAL, maxx REAL, maxy REAL,
                 fetched REAL, timestamp TEXT)""")
+            con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
+            # cached data from a different query (e.g. new tags) is discarded
+            query = hashlib.sha1(postpass_sql(0, 0, 0, 0).encode()).hexdigest()
+            row = con.execute("SELECT value FROM meta WHERE key = 'query'").fetchone()
+            if row is None or row[0] != query:
+                for (old,) in con.execute("SELECT file FROM cache").fetchall():
+                    (self.cache_dir / old).unlink(missing_ok=True)
+                con.execute("DELETE FROM cache")
+                con.execute("INSERT OR REPLACE INTO meta VALUES ('query', ?)", (query,))
 
     def describe(self):
         return "Postpass (Geofabrik)"

@@ -18,7 +18,7 @@ import shapely
 from shapely import STRtree, wkt
 import networkx as nx
 from shapely.geometry import LineString, MultiLineString, Point, Polygon, box
-from shapely.ops import nearest_points, unary_union
+from shapely.ops import linemerge, nearest_points, unary_union
 from xml.sax.saxutils import quoteattr
 
 from style import AREA_LAYERS, LINE_LAYERS, ROUTING, load_style, set_path
@@ -29,13 +29,18 @@ MAJOR = {"motorway", "trunk", "primary", "secondary"}
 MEDIUM = {"tertiary"}
 MINOR = {"residential", "unclassified", "living_street", "pedestrian"}
 RAIL = {"rail", "light_rail", "subway"}
-GREEN = {("leisure", "park"), ("landuse", "forest"), ("natural", "wood"), ("landuse", "cemetery")}
+GREEN = {("leisure", "park"), ("leisure", "garden"), ("leisure", "playground"),
+         ("landuse", "forest"), ("natural", "wood"), ("landuse", "cemetery")}
 WATER = {("natural", "water"), ("waterway", "riverbank")}
 
 # Parallel lines of a class closer than MERGE_M meters (but at least
 # MERGE_FACTOR x line width) are merged into one centerline
 MERGE_M = {"major": 30, "medium": 25, "minor": 0, "rail": 20}
 MERGE_FACTOR = {"major": 1.1, "medium": 1.1, "minor": 1.5, "rail": 2.0}
+
+# Tunnels and covered sections up to this length that connect visible lines of the
+# same class at both ends (e.g. under a wide bridge) are stitched like the surface
+PASSAGE_M = 100
 
 
 # ---------------------------------------------------------------- Geometry
@@ -448,16 +453,43 @@ def write_preview_svg(path, layers, w, h, fabric="#f5f2ea"):
 
 # ---------------------------------------------------------------- Main
 
+def lowered(t):
+    """Below its surroundings: tunnel, covered or negative layer."""
+    if t.get("tunnel", "no") != "no" or t.get("covered", "no") != "no":
+        return True
+    try:
+        return int(t.get("layer", 0)) < 0
+    except ValueError:
+        return False
+
+
+def underground(f):
+    """Tunnel, covered, or below ground. For lines a negative layer alone usually
+    just means passing under a bridge, so it only counts for areas and subways."""
+    t = f["tags"]
+    if t.get("tunnel", "no") != "no" or t.get("covered", "no") != "no":
+        return True
+    return lowered(t) and (f["kind"] == "area" or t.get("railway") == "subway")
+
+
+def short_passages(tunnels, surface, max_len):
+    """Underground sections (merged into chains) no longer than max_len whose both
+    ends meet a surface line, so the line is not interrupted under a bridge."""
+    if not tunnels or not surface:
+        return []
+    surf = unary_union(surface)
+    shapely.prepare(surf)
+    out = []
+    for l in lines_of(linemerge([p for t in tunnels for p in lines_of(t)])):
+        ends = [Point(l.coords[0]), Point(l.coords[-1])]
+        if l.length <= max_len and all(surf.dwithin(p, 0.01) for p in ends):
+            out.append(l)
+    return out
+
+
 def classify(f):
     """OSM object -> style layer (or None)."""
     t = f["tags"]
-    if t.get("tunnel", "no") != "no" or t.get("covered", "no") != "no":
-        return None
-    try:
-        if int(t.get("layer", 0)) < 0:
-            return None
-    except ValueError:
-        pass
     if f["kind"] == "way" and t.get("area") != "yes":
         hw, rw = t.get("highway", "").removesuffix("_link"), t.get("railway")
         if hw in MAJOR:
@@ -518,18 +550,32 @@ def build(data, width_m, w_mm, h_mm, style):
 
     frame = box(0, 0, w_mm, h_mm)
     groups = {name: [] for name in LINE_LAYERS + AREA_LAYERS}
+    # lines passing underneath something: stitched, but they do not displace other lines
+    tunnels, below = ({name: [] for name in LINE_LAYERS} for _ in range(2))
     for f in data["features"]:
         g = classify(f)
         if g is None or g not in enabled:
             continue
         geom = f["geom"] if "geom" in f else wkt.loads(f["wkt"])
-        geom = shapely.transform(geom, to_mm).intersection(frame.buffer(5 if g in LINE_LAYERS else 0))
-        if not geom.is_empty:
-            groups[g].append(geom)
+        geom = shapely.transform(geom, to_mm)
+        if underground(f):
+            if g in tunnels:
+                tunnels[g].append(geom)
+            continue
+        groups[g].append(geom)
+        if g in below and lowered(f["tags"]):
+            below[g].append(geom)
+    for name in tunnels:
+        passages = short_passages(tunnels[name], groups[name], PASSAGE_M * scale)
+        groups[name] += passages
+        below[name] += passages
+    for name in groups:
+        clip = frame.buffer(5 if name in LINE_LAYERS else 0)
+        groups[name] = [c for g in groups[name] if not (c := g.intersection(clip)).is_empty]
 
     # Lines in descending priority: merge, remove parallels to higher classes,
     # cut satin at crossing satin
-    lines, covered, satin_cover = {}, None, None
+    lines, covered, satin_cover, blocking = {}, None, None, Polygon()
     for name in LINE_LAYERS:
         cfg, w = L[name], line_width(L[name])
         # lines extending beyond the frame make the skeleton reach all the way to the edge
@@ -537,16 +583,19 @@ def build(data, width_m, w_mm, h_mm, style):
         ls = [p for l in ls for p in lines_of(l.intersection(frame))]
         if cfg["stitch"] == "satin" and satin_cover is not None:
             ls = cut_lines(ls, satin_cover.buffer(-0.15), s)
-            other = covered.difference(satin_cover)
+            other = blocking.difference(satin_cover)
             ls = drop_parallel(ls, other.buffer(w) if not other.is_empty else None, s)
-        elif covered is not None:
-            ls = drop_parallel(ls, covered.buffer(w), s)
+        elif not blocking.is_empty:
+            ls = drop_parallel(ls, blocking.buffer(w), s)
         lines[name] = ls
         if ls:
             area = unary_union([l.buffer(w / 2) for l in ls])
             covered = area if covered is None else covered.union(area)
             if cfg["stitch"] == "satin":
                 satin_cover = area if satin_cover is None else satin_cover.union(area)
+            if below[name]:
+                area = area.difference(unary_union(below[name]).buffer(w / 2 + 0.1))
+            blocking = blocking.union(area)
 
     # Areas: keep space free for lines so nothing is stitched on top of each other
     keepout = covered.buffer(s["road_clearance"]) if covered is not None else Polygon()
