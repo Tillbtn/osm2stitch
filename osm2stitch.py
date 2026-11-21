@@ -498,9 +498,9 @@ def write_plain_svg(path, plain, style, w, h, meta=None):
             st = (f"fill:none;stroke:{cfg['color']};stroke-width:{line_width(cfg)};"
                   "stroke-linecap:round;stroke-linejoin:round")
             layer(name, [f'd="M {fmt(l.coords)}" style="{st}"' for l in plain["lines"][name]])
-    if plain["frame"]:
+    if plain["frame"] is not None:
         cfg = L["frame"]
-        layer("frame", [f'd="M 0,0 H {w} V {h} H 0 Z" '
+        layer("frame", [f'd="{path_d_poly(plain["frame"])}" '
                         f'style="fill:none;stroke:{cfg["color"]};stroke-width:{line_width(cfg)}"'])
     out.append("</svg>")
     Path(path).write_text("\n".join(out))
@@ -617,10 +617,25 @@ def line_width(cfg):
     return 0.5 if cfg["repeats"] >= 3 else 0.3
 
 
-def build(data, width_m, w_mm, h_mm, style):
+def edge_margin(style):
+    """How far stitches can reach beyond their centerline (satin half width plus
+    pull compensation, fill underlay expansion), so the stitched result stays
+    within the requested size."""
+    L, pull = style["layers"], style["fabric"]["pull_compensation"]
+    m = 0.3  # fill underlay expansion and rounding
+    for name, cfg in L.items():
+        if cfg["enabled"] and name in LINE_LAYERS + ("frame",):
+            m = max(m, line_width(cfg) / 2 + (pull if cfg["stitch"] == "satin" else 0))
+    return m
+
+
+def build(data, width_m, w_mm, h_mm, style, margin=None):
+    """margin: inset of the frame from the document edge in mm (default: edge_margin)."""
     s = {**style["generalization"], **ROUTING[style["routing"]["mode"]]}
     L = style["layers"]
     enabled = {name for name, cfg in L.items() if cfg["enabled"]}
+    if margin is None:
+        margin = edge_margin(style)
 
     lat, lon = data["center"]
     zone = int((lon + 180) // 6) + 1
@@ -632,7 +647,9 @@ def build(data, width_m, w_mm, h_mm, style):
         x, y = proj.transform(xy[:, 0], xy[:, 1])
         return np.column_stack([(x - cx) * scale + w_mm / 2, h_mm / 2 - (y - cy) * scale])
 
-    frame = box(0, 0, w_mm, h_mm)
+    # everything is clipped to the inset frame, so satins and fills ending at the
+    # edge do not protrude beyond the requested size
+    frame = box(margin, margin, w_mm - margin, h_mm - margin)
     groups = {name: [] for name in LINE_LAYERS + AREA_LAYERS}
     # lines passing underneath something: stitched, but they do not displace other lines
     tunnels, below = ({name: [] for name in LINE_LAYERS} for _ in range(2))
@@ -697,7 +714,7 @@ def build(data, width_m, w_mm, h_mm, style):
     # Generalized geometry before conversion to stitches, for the plain SVG
     plain = {"lines": {name: lines[name] for name in LINE_LAYERS if name in enabled},
              "areas": {name: polys_of(areas[name]) for name in AREA_LAYERS if name in enabled},
-             "frame": "frame" in enabled}
+             "frame": frame if "frame" in enabled else None}
 
     # Create objects; coordinates rounded so they lie exactly on network nodes
     net_lines = []

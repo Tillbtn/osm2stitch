@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from osm2stitch import (OSM_RIGHTS, OSM_SOURCE, build, inkstitch_cmd, inkstitch_version, strip_spirals,
+from osm2stitch import (OSM_RIGHTS, OSM_SOURCE, build, edge_margin, inkstitch_cmd, inkstitch_version, strip_spirals,
                         write_plain_svg, write_preview_svg, write_svg)
 from osmindex import Index
 from sources import FallbackSource, PostpassSource, SourceError, bbox_around
@@ -119,8 +119,6 @@ def process(job):
     data = source.query(r.lat, r.lon, r.width_m, height_m)
     job.data_source = data["source"] | {"seconds": round(time.time() - t0, 1)}
 
-    job.status = "geometry"
-    t0 = time.time()
     job.inkstitch = inkstitch_version()
     meta = {
         "title": f"osm2stitch {r.lat:.6f}, {r.lon:.6f}",
@@ -132,26 +130,37 @@ def process(job):
                        f"Ink/Stitch: {job.inkstitch}\n"
                        f"Data: {job.data_source['name']}, as of {job.data_source.get('timestamp') or '?'}",
     }
-    layers, stats, plain = build(data, r.width_m, r.size_w, r.size_h, job.style)
-    write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h, meta)
-    write_plain_svg(job.dir / "map_plain.svg", plain, job.style, r.size_w, r.size_h, meta)
-    write_preview_svg(job.dir / "quickview.svg", layers, r.size_w, r.size_h, job.style["fabric"]["color"])
-    (job.dir / "style.json").write_text(json.dumps(job.style, ensure_ascii=False, indent=2))
-    job.geometry = {"objects": stats, "seconds": round(time.time() - t0, 1)}
-    job.files.update(svg="map.svg", plain_svg="map_plain.svg", preview_svg="quickview.svg")
-
-    job.status = "inkstitch"
-    t0 = time.time()
     emb = job.dir / f"map.{r.format}"
     png = job.dir / "preview.png"
-    try:
-        run_inkstitch_parallel(job.dir / "map.svg", emb, png, r.format)
-    except RuntimeError:
-        # Ink/Stitch occasionally fails on spiral contour fills -> retry without spirals
-        if not strip_spirals(layers):
-            raise
+    margin = edge_margin(job.style)
+    for _ in range(3):
+        job.status = "geometry"
+        t0 = time.time()
+        layers, stats, plain = build(data, r.width_m, r.size_w, r.size_h, job.style, margin)
         write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h, meta)
-        run_inkstitch_parallel(job.dir / "map.svg", emb, png, r.format)
+        write_plain_svg(job.dir / "map_plain.svg", plain, job.style, r.size_w, r.size_h, meta)
+        write_preview_svg(job.dir / "quickview.svg", layers, r.size_w, r.size_h, job.style["fabric"]["color"])
+        (job.dir / "style.json").write_text(json.dumps(job.style, ensure_ascii=False, indent=2))
+        job.geometry = {"objects": stats, "seconds": round(time.time() - t0, 1)}
+        job.files.update(svg="map.svg", plain_svg="map_plain.svg", preview_svg="quickview.svg")
+
+        job.status = "inkstitch"
+        t0 = time.time()
+        try:
+            run_inkstitch_parallel(job.dir / "map.svg", emb, png, r.format)
+        except RuntimeError:
+            # Ink/Stitch occasionally fails on spiral contour fills -> retry without spirals
+            if not strip_spirals(layers):
+                raise
+            write_svg(job.dir / "map.svg", layers, r.size_w, r.size_h, meta)
+            run_inkstitch_parallel(job.dir / "map.svg", emb, png, r.format)
+        # the machine rejects files larger than the hoop: if stitches still protrude
+        # (e.g. wide satins at an angle to the edge), shrink the frame and redo
+        st = embroidery_stats(emb)
+        over = max(st["width_mm"] - r.size_w, st["height_mm"] - r.size_h)
+        if over <= 0:
+            break
+        margin += over / 2 + 0.2
     job.files.update(embroidery=emb.name, png=png.name)
     job.result = embroidery_stats(emb) | {"seconds": round(time.time() - t0, 1), "inkstitch": job.inkstitch}
 
