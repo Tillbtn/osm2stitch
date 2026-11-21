@@ -54,7 +54,7 @@ def build(pbf, db_path):
     for obj in fp:
         tags = {k: v for k, v in obj.tags if k in KEEP_TAGS}
         try:
-            if obj.is_way() and LINE_KEYS & tags.keys():
+            if obj.is_way() and (LINE_KEYS & tags.keys() or tags.get("natural") == "coastline"):
                 wkb = factory.create_linestring(obj)
                 kind = "way"
             elif obj.is_area() and AREA_KEYS & tags.keys():

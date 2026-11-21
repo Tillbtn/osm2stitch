@@ -13,7 +13,7 @@ STYLES_DIR = Path(__file__).parent / "styles"
 
 # Line classes in descending priority: higher ones cut/displace lower ones
 LINE_LAYERS = ("major", "medium", "minor", "rail")
-AREA_LAYERS = ("water", "green", "buildings")
+AREA_LAYERS = ("water", "beach", "green", "buildings")
 LAYERS = LINE_LAYERS + AREA_LAYERS + ("frame",)
 
 STITCHES = {
@@ -39,7 +39,10 @@ DEFAULT = {
         "water": {"label": "Water", "enabled": True, "color": "#2f6fb0",
                   "stitch": "tatami", "row_spacing": 0.25, "angle": 0, "underlay": True,
                   "repeats": 3, "stitch_length": 3.0},
-        "green": {"label": "Parks & forest", "enabled": True, "color": "#1a1a1a",
+        "beach": {"label": "Beaches", "enabled": False, "color": "#d9bf86",
+                  "stitch": "tatami", "row_spacing": 0.6, "angle": 45, "underlay": False,
+                  "repeats": 1, "stitch_length": 3.0},
+        "green": {"label": "Parks & green", "enabled": True, "color": "#1a1a1a",
                   "stitch": "contour", "row_spacing": 1.8, "angle": 0, "underlay": False,
                   "repeats": 1, "stitch_length": 2.5},
         "buildings": {"label": "Buildings", "enabled": True, "color": "#1a1a1a",

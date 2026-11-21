@@ -18,7 +18,8 @@ import shapely
 from shapely import STRtree, wkt
 import networkx as nx
 from shapely.geometry import LineString, MultiLineString, Point, Polygon, box
-from shapely.ops import linemerge, nearest_points, unary_union
+from shapely.geometry.polygon import orient
+from shapely.ops import linemerge, nearest_points, polygonize, unary_union
 from xml.sax.saxutils import escape, quoteattr
 
 from style import AREA_LAYERS, LINE_LAYERS, ROUTING, load_style, set_path
@@ -30,8 +31,15 @@ MEDIUM = {"tertiary"}
 MINOR = {"residential", "unclassified", "living_street", "pedestrian"}
 RAIL = {"rail", "light_rail", "subway"}
 GREEN = {("leisure", "park"), ("leisure", "garden"), ("leisure", "playground"),
-         ("landuse", "forest"), ("natural", "wood"), ("landuse", "cemetery")}
+         ("landuse", "forest"), ("natural", "wood"), ("landuse", "cemetery"),
+         ("landuse", "meadow"), ("landuse", "allotments"), ("landuse", "grass"),
+         ("landuse", "village_green"), ("landuse", "recreation_ground"), ("landuse", "orchard"),
+         ("natural", "grassland"), ("natural", "heath"), ("natural", "scrub")}
 WATER = {("natural", "water"), ("waterway", "riverbank")}
+BEACH = {("natural", "beach")}
+# The sea is not an object in OSM; it is derived from natural=coastline ways
+# (land on the left, water on the right in drawing direction)
+COASTLINE = ("natural", "coastline")
 
 # Parallel lines of a class closer than MERGE_M meters (but at least
 # MERGE_FACTOR x line width) are merged into one centerline
@@ -564,6 +572,37 @@ def short_passages(tunnels, surface, max_len):
     return out
 
 
+def sea_area(coast, land, region):
+    """The sea within region (in mm, y pointing down), from coastline lines and
+    land polygons (islands mapped as closed coastline ways).
+
+    The coastlines split the region into faces. A face lies on the sea side if its
+    boundary runs along the coastlines in their drawing direction: in OSM the water
+    is on the right, which after the y flip of the projection is the left, the same
+    side as the interior of a counterclockwise ring. Faces without any coastline on
+    their boundary are sea if they contain islands."""
+    land = unary_union(land) if land else Polygon()
+    lines = [p for l in coast for p in lines_of(l.intersection(region))]
+    if not lines:
+        return region.difference(land) if land.intersects(region) else Polygon()
+    segs = [LineString(c) for l in lines for c in zip(l.coords[:-1], l.coords[1:])]
+    seg_dir = np.array([np.subtract(g.coords[1], g.coords[0]) for g in segs])
+    tree = STRtree(segs)
+    sea = []
+    for face in polygonize(unary_union([region.boundary, *lines])):
+        face = orient(face, 1.0)
+        vote = 0.0
+        for ring in [face.exterior, *face.interiors]:
+            c = np.asarray(ring.coords)
+            d = c[1:] - c[:-1]
+            mids = shapely.points((c[1:] + c[:-1]) / 2)
+            i, j = tree.query(mids, predicate="dwithin", distance=1e-4)
+            vote += float(np.sum(np.sign(np.einsum("ij,ij->i", d[i], seg_dir[j])) * np.hypot(*d[i].T)))
+        if vote > 0 or (vote == 0 and face.intersects(land)):
+            sea.append(face)
+    return unary_union(sea).difference(land)
+
+
 def classify(f):
     """OSM object -> style layer (or None)."""
     t = f["tags"]
@@ -581,6 +620,8 @@ def classify(f):
         items = set(t.items())
         if items & WATER:
             return "water"
+        if items & BEACH:
+            return "beach"
         if items & GREEN:
             return "green"
         if t.get("building", "no") not in ("no", "roof"):
@@ -653,7 +694,13 @@ def build(data, width_m, w_mm, h_mm, style, margin=None):
     groups = {name: [] for name in LINE_LAYERS + AREA_LAYERS}
     # lines passing underneath something: stitched, but they do not displace other lines
     tunnels, below = ({name: [] for name in LINE_LAYERS} for _ in range(2))
+    coast, land = [], []
     for f in data["features"]:
+        if f["tags"].get("natural") == COASTLINE[1]:
+            if "water" in enabled:
+                geom = shapely.transform(f["geom"] if "geom" in f else wkt.loads(f["wkt"]), to_mm)
+                (land if f["kind"] == "area" else coast).append(geom)
+            continue
         g = classify(f)
         if g is None or g not in enabled:
             continue
@@ -666,6 +713,8 @@ def build(data, width_m, w_mm, h_mm, style, margin=None):
         groups[g].append(geom)
         if g in below and lowered(f["tags"]):
             below[g].append(geom)
+    if coast or land:
+        groups["water"].append(sea_area(coast, land, box(*frame.buffer(1).bounds)))
     for name in tunnels:
         passages = short_passages(tunnels[name], groups[name], PASSAGE_M * scale)
         groups[name] += passages
@@ -707,8 +756,12 @@ def build(data, width_m, w_mm, h_mm, style, margin=None):
     blocks = unary_union(groups["buildings"]).buffer(a, join_style="mitre").buffer(-a, join_style="mitre")
     areas["buildings"] = clean_area(blocks.difference(keepout).difference(areas["water"].buffer(0.3)),
                                     s, s["min_building"])
+    areas["beach"] = clean_area(unary_union(groups["beach"]).difference(keepout)
+                                .difference(areas["water"].buffer(0.3))
+                                .difference(areas["buildings"].buffer(0.3)), s)
     areas["green"] = clean_area(unary_union(groups["green"]).difference(keepout)
                                 .difference(areas["water"].buffer(0.5))
+                                .difference(areas["beach"].buffer(0.3))
                                 .difference(areas["buildings"].buffer(0.3)), s)
 
     # Generalized geometry before conversion to stitches, for the plain SVG

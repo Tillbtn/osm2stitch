@@ -23,7 +23,7 @@ from pathlib import Path
 import shapely
 from shapely.geometry import box, shape
 
-from osm2stitch import GREEN, MAJOR, MEDIUM, MINOR, RAIL, WATER
+from osm2stitch import BEACH, COASTLINE, GREEN, MAJOR, MEDIUM, MINOR, RAIL, WATER
 
 POSTPASS_URL = "https://postpass.geofabrik.de/api/interpreter"
 USER_AGENT = "osm2stitch/0.1 (+https://github.com/Tillbtn/osm2stitch)"
@@ -51,10 +51,11 @@ def postpass_sql(minx, miny, maxx, maxy):
     """A single query for lines and areas, filtered to what osm2stitch uses."""
     highways = MAJOR | MEDIUM | MINOR | {f"{v}_link" for v in MAJOR | MEDIUM}
     bbox = f"ST_MakeEnvelope({minx:.6f},{miny:.6f},{maxx:.6f},{maxy:.6f},4326)"
-    area_tags = " OR ".join(f"tags @> {_sql_str(json.dumps({k: v}))}::jsonb" for k, v in sorted(WATER | GREEN))
+    area_tags = " OR ".join(f"tags @> {_sql_str(json.dumps({k: v}))}::jsonb" for k, v in sorted(WATER | BEACH | GREEN | {COASTLINE}))
     return (
         f"SELECT 'way' AS kind, tags, geom FROM postpass_line WHERE geom && {bbox} AND "
-        f"(tags->>'highway' IN {_in(highways)} OR tags->>'railway' IN {_in(RAIL)}) "
+        f"(tags->>'highway' IN {_in(highways)} OR tags->>'railway' IN {_in(RAIL)} "
+        f"OR tags->>'natural' = {_sql_str(COASTLINE[1])}) "
         f"UNION ALL "
         f"SELECT 'area' AS kind, tags, geom FROM postpass_polygon WHERE geom && {bbox} AND "
         f"((tags ? 'building' AND tags->>'building' NOT IN ('no', 'roof')) OR {area_tags})"

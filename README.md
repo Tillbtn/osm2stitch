@@ -38,8 +38,11 @@ Jobs are processed one after another through a queue; results are stored in
    filtered to the tags that are used. Responses are cached with some margin in
    `data/cache/postpass/` (24 h by default), so style changes and small shifts
    need no new query.
-2. **Classification:** roads by class, railways, water, green areas (parks,
-   gardens, playgrounds, forest, cemeteries) and buildings. Tunnels, covered and
+2. **Classification:** roads by class, railways, water, beaches, green areas
+   (parks, gardens, playgrounds, forest, cemeteries, meadows, allotments, grass,
+   grassland, heath, scrub, orchards) and buildings. The sea is not an OSM object;
+   it is built from `natural=coastline` ways (water on their right-hand side),
+   islands mapped as closed coastlines are cut out. Tunnels, covered and
    underground objects are skipped, except short passages (up to 100 m, e.g.
    under a wide bridge) that connect visible lines at both ends.
 3. **Projection:** UTM via pyproj, scaled to mm on the fabric.
@@ -63,7 +66,7 @@ Jobs are processed one after another through a queue; results are stored in
 ## Styles
 
 A style defines for each layer (major, tertiary and minor roads, railways,
-water, parks, buildings, frame) whether and how it is stitched and in which
+water, beaches, parks, buildings, frame) whether and how it is stitched and in which
 color, plus generalization and routing settings. Defaults are in `style.py`,
 presets in `styles/*.json`, which only need to contain the differences:
 
@@ -72,7 +75,7 @@ presets in `styles/*.json`, which only need to contain the differences:
 | `toner-water` | black, water as a blue fill (2 threads, default) |
 | `toner` | single color, water as an open fill |
 | `minimal` | roads and shorelines only |
-| `colorful` | dark roads, blue water, green parks, grey buildings (4 threads) |
+| `colorful` | dark roads, blue water, sand beaches, green parks, grey buildings (5 threads) |
 
 Routing `continuous` (default) connects as much as possible via travel paths;
 `balanced` trims earlier.
