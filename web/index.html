@@ -206,7 +206,8 @@
 
   <p class="foot">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
     · Stitches: <a href="https://inkstitch.org" target="_blank" rel="noopener">Ink/Stitch</a><br>
-    <span id="dataInfo"></span></p>
+    <span id="dataInfo"></span><br>
+    <a id="logoLink" href="/logo.pes" download>OSM logo as embroidery file</a> (50 mm, <span id="logoFmt">PES</span>)</p>
 </aside>
 <div id="map"></div>
 
@@ -333,6 +334,13 @@ $("#preset").addEventListener("change", () => applyPreset($("#preset").value));
 $("#resetStyle").addEventListener("click", () => applyPreset($("#preset").value));
 $("#fabric").addEventListener("input", () => state.style.fabric.color = $("#fabric").value);
 $("#routing").addEventListener("change", () => state.style.routing.mode = $("#routing").value);
+function updateLogoLink() {
+  const fmt = $("#format").value;
+  $("#logoLink").href = `/logo.${fmt}`;
+  $("#logoFmt").textContent = fmt.toUpperCase();
+}
+$("#format").addEventListener("change", updateLogoLink);
+updateLogoLink();
 
 fetch("api/styles").then(r => r.json()).then(s => {
   state.styles = s;
