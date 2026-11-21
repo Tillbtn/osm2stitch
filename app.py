@@ -70,8 +70,13 @@ class Job:
     def public(self, position=None):
         return {"id": self.id, "status": self.status, "error": self.error, "queue_position": position,
                 "geometry": self.geometry, "result": self.result, "data_source": self.data_source,
-                "inkstitch": self.inkstitch,
+                "inkstitch": self.inkstitch, "request": self.req.model_dump(),
                 "files": {k: f"files/{self.id}/{v}" for k, v in self.files.items()}}
+
+    def save(self):
+        """Persist the finished job so permalinks keep working after a restart."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        (self.dir / "job.json").write_text(json.dumps(self.public(), ensure_ascii=False))
 
 
 app = FastAPI(title="osm2stitch")
@@ -198,6 +203,10 @@ def worker():
         except Exception as e:
             traceback.print_exc()
             job.status, job.error = "error", str(e)
+        try:
+            job.save()
+        except OSError:
+            traceback.print_exc()
 
 
 @app.get("/")
@@ -247,8 +256,13 @@ def create_job(req: JobRequest):
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
-    if not re.fullmatch(r"[0-9a-f]{10}", job_id) or job_id not in jobs:
+    if not re.fullmatch(r"[0-9a-f]{10}", job_id):
         raise HTTPException(404, "Unknown job")
+    if job_id not in jobs:  # finished before the last restart?
+        saved = JOBS_DIR / job_id / "job.json"
+        if not saved.exists():
+            raise HTTPException(404, "Unknown or expired job")
+        return json.loads(saved.read_text())
     job = jobs[job_id]
     position = None
     if job.status == "queued":

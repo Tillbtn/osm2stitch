@@ -182,6 +182,8 @@
   <section>
     <button class="primary" id="go">Create embroidery file</button>
     <div id="formError" class="error" hidden></div>
+    <button type="button" id="share" style="width:100%;margin-top:8px">Copy link</button>
+    <p class="hint" id="shareMsg" style="margin:6px 0 0"></p>
     <ul class="steps" id="steps" hidden>
       <li data-s="queued">Queued</li>
       <li data-s="loading">Loading OSM data</li>
@@ -262,6 +264,7 @@ function update() {
   if (mpm < 3) warn.push("Very small section: roads are drawn too narrow in proportion.");
   if (state.bounds && !state.bounds.contains(frameBounds(c))) warn.push("The frame extends beyond the data area (dashed).");
   $("#scaleWarn").hidden = !warn.length; $("#scaleWarn").innerHTML = warn.join("<br>");
+  syncUrl();
 }
 function fit() { map.fitBounds(frameBounds(map.getCenter()), { padding: [40, 40], animate: false }); }
 
@@ -282,6 +285,9 @@ $("#orient").addEventListener("click", e => {
 // ---- Style editor
 function applyPreset(id) {
   state.style = structuredClone(state.styles.presets[id]);
+  showStyle();
+}
+function showStyle() {
   $("#presetDesc").textContent = state.style.description;
   $("#fabric").value = state.style.fabric.color;
   $("#routing").value = state.style.routing.mode;
@@ -332,21 +338,121 @@ $("#layers").addEventListener("click", e => {
 });
 $("#preset").addEventListener("change", () => applyPreset($("#preset").value));
 $("#resetStyle").addEventListener("click", () => applyPreset($("#preset").value));
-$("#fabric").addEventListener("input", () => state.style.fabric.color = $("#fabric").value);
-$("#routing").addEventListener("change", () => state.style.routing.mode = $("#routing").value);
+$("#fabric").addEventListener("input", () => { state.style.fabric.color = $("#fabric").value; syncUrl(); });
+$("#routing").addEventListener("change", () => { state.style.routing.mode = $("#routing").value; syncUrl(); });
 function updateLogoLink() {
   const fmt = $("#format").value;
   $("#logoLink").href = `/logo.${fmt}`;
   $("#logoFmt").textContent = fmt.toUpperCase();
 }
-$("#format").addEventListener("change", updateLogoLink);
+$("#format").addEventListener("change", () => { updateLogoLink(); syncUrl(); });
 updateLogoLink();
 
-fetch("api/styles").then(r => r.json()).then(s => {
+// ---- Permalinks: the URL hash mirrors the settings (only style changes relative to the preset),
+// plus the last job as long as the settings still match it
+function settings() {
+  const c = map.getCenter().wrap(), [w, h] = sizeMm();
+  return { lat: +c.lat.toFixed(5), lon: +c.lng.toFixed(5), width_m: +$("#width").value, size_w: w, size_h: h,
+           format: $("#format").value, style: $("#preset").value,
+           overrides: { layers: state.style.layers, fabric: state.style.fabric, routing: state.style.routing } };
+}
+const isObj = v => v && typeof v === "object" && !Array.isArray(v);
+function diff(a, b) {  // what a changes relative to b
+  if (!isObj(a)) return JSON.stringify(a) === JSON.stringify(b) ? undefined : a;
+  const d = {};
+  for (const k in a) { const x = diff(a[k], b?.[k]); if (x !== undefined) d[k] = x; }
+  return Object.keys(d).length ? d : undefined;
+}
+function merge(target, src) {  // apply a diff, ignoring keys the style does not know (e.g. from old links)
+  for (const [k, v] of Object.entries(isObj(src) ? src : {}))
+    if (k in target) target[k] = isObj(v) && isObj(target[k]) ? merge(target[k], v) : v;
+  return target;
+}
+const b64url = {
+  enc: s => btoa(String.fromCharCode(...new TextEncoder().encode(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+  dec: s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0))),
+};
+function toHash(s) {  // "lat/lon&w=…" – syncUrl() puts "map=zoom/" in front, as on openstreetmap.org
+  const p = new URLSearchParams({ w: s.width_m, size: `${s.size_w}x${s.size_h}`, f: s.format, p: s.style });
+  const d = diff(s.overrides, state.styles.presets[s.style]);
+  if (d) p.set("s", b64url.enc(JSON.stringify(d)));
+  return `${s.lat}/${s.lon}&${p}`;
+}
+function fromHash(hash) {
+  const p = new URLSearchParams(hash), num = v => (v || "").split(/[,x]/).map(Number);
+  const [size_w, size_h] = num(p.get("size"));
+  let zoom, lat, lon;
+  if (p.get("map")) [zoom, lat, lon] = p.get("map").split("/").map(Number);
+  else [lat, lon] = num(p.get("c"));  // links from before 2026-11-21
+  let overrides = {};
+  try { if (p.get("s")) overrides = JSON.parse(b64url.dec(p.get("s"))); } catch { /* broken link: keep the preset */ }
+  return { job: p.get("job"), zoom, lat, lon, width_m: +p.get("w"), size_w, size_h, format: p.get("f"), style: p.get("p"), overrides };
+}
+function setSelect(el, v) {
+  const ok = [...el.options].some(o => o.value === v);
+  if (ok) el.value = v;
+  return ok;
+}
+function restore(s) {  // s: a job request or fromHash() result; missing values keep the defaults
+  if (s.size_w > 0 && s.size_h > 0) {
+    if (!setSelect($("#hoop"), `${Math.min(s.size_w, s.size_h)}x${Math.max(s.size_w, s.size_h)}`)) {
+      $("#hoop").value = "custom"; $("#cw").value = s.size_w; $("#ch").value = s.size_h;
+    }
+    $("#customSize").hidden = $("#hoop").value !== "custom";
+    state.orient = s.size_w >= s.size_h ? "landscape" : "portrait";
+    for (const x of $("#orient").children) x.setAttribute("aria-pressed", x.dataset.v === state.orient);
+  }
+  if (s.width_m > 0) $("#width").value = s.width_m;
+  if (s.format) setSelect($("#format"), s.format);
+  updateLogoLink();
+  if (s.style) setSelect($("#preset"), s.style);
+  state.style = merge(structuredClone(state.styles.presets[$("#preset").value]), s.overrides);
+  showStyle();
+  const hasZoom = s.zoom > 0 && s.zoom <= 19;
+  if (Number.isFinite(s.lat) && Number.isFinite(s.lon)) map.setView([s.lat, s.lon], hasZoom ? s.zoom : map.getZoom(), { animate: false });
+  if (!hasZoom) fit();
+}
+let syncTimer;
+function syncUrl(now) {
+  if (!state.ready) return;
+  clearTimeout(syncTimer);
+  const write = () => {
+    let h = toHash(settings());
+    if (state.job && h === state.jobHash) h += `&job=${state.job}`;
+    history.replaceState(null, "", `#map=${+map.getZoom().toFixed(2)}/${h}`);
+  };
+  now ? write() : syncTimer = setTimeout(write, 250);
+}
+window.addEventListener("hashchange", () => location.reload());  // a link pasted into this tab
+$("#share").addEventListener("click", async () => {
+  syncUrl(true);
+  const url = location.href, withJob = url.includes("&job=");
+  try {
+    await navigator.clipboard.writeText(url);
+    $("#shareMsg").textContent = withJob ? "Link copied – it opens these settings and this result."
+                                         : "Link copied – it opens these settings.";
+  } catch { prompt("Copy this link:", url); }
+});
+
+fetch("api/styles").then(r => r.json()).then(async s => {
   state.styles = s;
   $("#preset").innerHTML = Object.entries(s.presets).map(([id, p]) =>
     `<option value="${id}" ${id === "toner-water" ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-  applyPreset($("#preset").value);
+  const link = fromHash(location.hash.slice(1));
+  let job = null;
+  if (/^[0-9a-f]{10}$/.test(link.job || "")) {
+    const r = await fetch(`api/jobs/${link.job}`);
+    if (r.ok) job = await r.json();
+    else showError("The linked result is no longer available – its settings are restored, create it again.");
+  }
+  restore(job?.request ? { ...job.request, zoom: link.zoom } : link);
+  state.ready = true;
+  if (job) {
+    state.job = job.id; state.jobHash = toHash(settings());
+    $("#steps").hidden = false; $("#go").disabled = true;
+    poll();
+  }
+  syncUrl(true);
 });
 
 fetch("api/info").then(r => r.json()).then(info => {
@@ -377,12 +483,7 @@ $("#searchForm").addEventListener("submit", async e => {
 
 // Start and track the job
 $("#go").addEventListener("click", async () => {
-  const c = map.getCenter(), [w, h] = sizeMm();
-  const body = {
-    lat: c.lat, lon: c.lng, width_m: +$("#width").value, size_w: w, size_h: h,
-    format: $("#format").value, style: $("#preset").value,
-    overrides: { layers: state.style.layers, fabric: state.style.fabric, routing: state.style.routing },
-  };
+  const body = settings();
   $("#formError").hidden = true; $("#go").disabled = true; $("#result").hidden = true;
   for (const li of $("#steps").children) li.className = "";
   try {
@@ -390,7 +491,8 @@ $("#go").addEventListener("click", async () => {
     const j = await r.json();
     if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Invalid input: " +
       (j.detail || []).map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(", "));
-    state.job = j.id; $("#steps").hidden = false;
+    state.job = j.id; state.jobHash = toHash(body); $("#steps").hidden = false;
+    syncUrl(true);
     poll();
   } catch (err) { showError(err.message); }
 });
